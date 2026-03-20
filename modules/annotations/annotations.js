@@ -375,22 +375,28 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 	 * @event enabled
 	 * @param {boolean} on
 	 */
-	enableInteraction(on) {
-		this.disabledInteraction = !on;
-		this.raiseEvent('enabled', {isEnabled: on});
-		this.historyManager._setControlsVisuallyEnabled(on);
-		//return to the default state, always
-		this.setMode(this.Modes.AUTO);
-	}
+    enableInteraction(on) {
+        this.disabledInteraction = !on;
+        this.raiseEvent('enabled', {isEnabled: on});
+        //return to the default state, always
+        this.setMode(this.Modes.AUTO);
+    }
 
     enableAnnotations(on) {
         this.enableInteraction(on);
         for (let instance of OSDAnnotations.FabricWrapper.instances()) {
             instance.enableAnnotations(on);
+            instance.removeHighlight();
         }
-        if (!on) {
-            this.historyManager.highlight(null);
-        }
+    }
+
+    /**
+     * Check whether object is full annotation (not a helper or doppelganger)
+     * @param {fabric.Object} o
+     * @return {boolean}
+     */
+    isAnnotation(o) {
+        return o.hasOwnProperty("incrementId") && o.hasOwnProperty("sessionID");
     }
 
 	/**
@@ -511,10 +517,9 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 		const conf = factory.configure(object, props);
 		factory.renderAllControls(conf);
 
-		object.internalID = object.internalID || this._generateInternalId()
-		object.zooming(graphicZoom, zoom);
-
-		this.historyManager.addAnnotationToBoard(object);
+        object.internalID = object.internalID || this._generateInternalId();
+        this.assignAnnotationIds([object]);
+        object.zooming(graphicZoom, zoom);
 	}
 
     setCloseEdgeMouseNavigation(enabled) {
@@ -524,29 +529,57 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
     }
 	/************************ Canvas object modification utilities *******************************/
 
-	_generateInternalId() {
-		const MULTIPLIER = 100;
-		const now = Date.now();
+    _generateInternalId() {
+        const MULTIPLIER = 100;
+        const now = Date.now();
         const objects = this.fabric.canvas._objects;
-		let lastIdTime = null;
+        let lastIdTime = null;
 
-		if (objects.length > 0) {
-			const lastObj = objects.at(-1);
-			const idSource = lastObj?.isHighlight ? objects.at(-2) : lastObj;
+        if (objects.length > 0) {
+            const lastObj = objects.at(-1);
+            const idSource = lastObj?.isHighlight ? objects.at(-2) : lastObj;
 
-			if (idSource?.internalID) {
-				lastIdTime = Math.floor(idSource.internalID / MULTIPLIER);
-			}
-		}
+            if (idSource?.internalID) {
+                lastIdTime = Math.floor(idSource.internalID / MULTIPLIER);
+            }
+        }
 
-		if (now === lastIdTime) {
-			this._idCounter++;
-		} else {
-			this._idCounter = 0;
-		}
+        if (now === lastIdTime) {
+            this._idCounter++;
+        } else {
+            this._idCounter = 0;
+        }
 
-		return now * MULTIPLIER + this._idCounter;
-	}
+        return now * MULTIPLIER + this._idCounter;
+    }
+
+    assignAnnotationIds(objects) {
+        if (!Array.isArray(objects)) objects = [objects];
+
+        for (const object of objects) {
+            if (!object || typeof object !== "object") continue;
+
+            if (!Object.prototype.hasOwnProperty.call(object, "incrementId")
+                || !Number.isFinite(Number(object.incrementId))) {
+                object.incrementId = this._annotationAutoIncrement++;
+            } else {
+                this._annotationAutoIncrement = Math.max(
+                    this._annotationAutoIncrement,
+                    Number(object.incrementId) + 1
+                );
+            }
+
+            if (!Object.prototype.hasOwnProperty.call(object, "label")
+                || !Number.isFinite(Number(object.label))) {
+                object.label = this._annotationLabelIncrement++;
+            } else {
+                this._annotationLabelIncrement = Math.max(
+                    this._annotationLabelIncrement,
+                    Number(object.label) + 1
+                );
+            }
+        }
+    }
 
 	/**
 	 * Undo action, handled by either a history implementation, or the current mode
@@ -869,6 +902,8 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 		this._extraProps = ["objects"];
 		this._wasModeFiredByKey = false;
 		this._idCounter = 0;
+        this._annotationAutoIncrement = 0;
+        this._annotationLabelIncrement = 0;
 		this._storeCacheSnapshots = this.getStaticMeta("storeCacheSnapshots", false);
 		this._exportPrivateAnnotations = this.getStaticMeta("exportPrivate", false); // todo make this more configurable
 		this.cursor = {
@@ -887,11 +922,6 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 		 * @member {History}
 		 */
 		this.history = APPLICATION_CONTEXT.history;
-		/**
-		 * History Manager reference
-		 * @member {OSDAnnotations.AnnotationHistoryManager}
-		 */
-		this.historyManager = new OSDAnnotations.AnnotationHistoryManager("historyManager", this, this.presets);
 
 		/**
 		 * FreeFormTool reference
@@ -974,7 +1004,8 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
                         instance.clearAnnotationSelection(true);
                     }
                     this.mode.discard(false);
-                    this.historyManager._boardItemSave();
+                    // todo move this to the annotation directly, or make the event sound less 'feature dependent'
+                    this.raiseEvent('annotation-board-save-request');
                     this.setMode(this.Modes.AUTO);
                     return;
                 }

@@ -1,7 +1,7 @@
 const {parse} = require("comment-json");
 
 // secure mode removes all 'secure' options from the config - leave to true when using the config for FE response
-module.exports.getCore = function(absPath, projectRoot, fileExists, readFile, readEnv, secure=true) {
+module.exports.getCore = function(absPath, projectRoot, fileExists, readFile, readEnv, secure=true, defaults={}) {
 
     function parseBool(x) {
         const type = typeof x;
@@ -252,7 +252,8 @@ module.exports.getCore = function(absPath, projectRoot, fileExists, readFile, re
         delete CORE.server.secure;
     }
 
-    core.VERSION = CORE["version"];
+    core.VERSION = CORE["version"] || defaults.version || "dev";
+    core["version"] = CORE.VERSION;
     core.GATEWAY = CORE["gateway"];
     core.CORE = CORE;
     core.ENV = ENV;

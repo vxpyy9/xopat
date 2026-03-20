@@ -68,21 +68,6 @@ class AnnotationsGUI extends XOpatPlugin {
     this.initHandlers();
     this.initHTML();
     this.setupTutorials();
-
-    const opacityControl = $('#annotations-opacity');
-    opacityControl.val(this.context.getAnnotationCommonVisualProperty('opacity'));
-    opacityControl.on('input', () => {
-      if (this.context.disabledInteraction) return;
-      this.context.setAnnotationCommonVisualProperty('opacity', Number.parseFloat(opacityControl.val()));
-    });
-
-    const borderControl = $('#annotations-border-width');
-    borderControl.val(this.context.getAnnotationCommonVisualProperty('originalStrokeWidth'));
-    borderControl.on('input', () => {
-      if (this.context.disabledInteraction) return;
-      this.context.setAnnotationCommonVisualProperty('originalStrokeWidth', Number.parseFloat(borderControl.val()));
-    });
-
     if (AnnotationsGUI.Previewer) {
       this.preview = new AnnotationsGUI.Previewer('preview', this);
     }
@@ -95,7 +80,10 @@ class AnnotationsGUI extends XOpatPlugin {
 
   async setupFromParams() {
     this._allowedFactories = this.getOption('factories', false) || this.getStaticMeta('factories') || ['polygon'];
-    this.context.historyManager.focusWithZoom = this.getOption('focusWithZoom', true);
+    this._focusWithZoom = this.getOption('focusWithZoom', true);
+    for (const fabric of OSDAnnotations.FabricWrapper.instances()) {
+      fabric.focusWithScreen = this._focusWithZoom;
+    }
 
     const convertOpts = this.getOption('convertors');
     // todo we should support setting all convertor opts here, and document this
@@ -119,7 +107,6 @@ class AnnotationsGUI extends XOpatPlugin {
     if (!formats.includes(this.exportOptions.format)) this.exportOptions.format = 'native';
     if (!formats.includes(this._defaultFormat)) this._defaultFormat = 'native';
 
-    this.isModalHistory = this.getOptionOrConfiguration('modalHistoryWindow', 'modalHistoryWindow', true);
     const staticPresetList = this.getOption('staticPresets', undefined, false);
     if (staticPresetList) {
       try {

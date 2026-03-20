@@ -48,6 +48,7 @@ export type XOpatSetup = {
     disablePluginsUi?: boolean | null;
     isStaticPreview?: boolean | null;
     historySize?: number | null;
+    maxMobileWidthPx?: number | null;
 };
 
 export type XOpatServerProxyAuthJwt = {

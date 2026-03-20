@@ -91,6 +91,7 @@
       "bar": {
         "pinFullscreen": "Pin to Fullscreen Menu",
         "copy": "Copy",
+        "edit": "Edit",
         "view": "View",
         "share": "Share",
         "exportUrl": "URL",

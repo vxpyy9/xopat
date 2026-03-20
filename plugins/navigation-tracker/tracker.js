@@ -1,62 +1,56 @@
 addPlugin("nav-tracker", class extends XOpatPlugin {
     constructor(id) {
         super(id);
-        this.records = {};
+
         this.canvasWidth = 250;
         this.animates = this.getStaticMeta("animate", true);
         this.maxOpacity = this.getStaticMeta("maxOpacity", 0.6);
-        this._overlayAdded = false;
-        this._activeVisit = null;
-        this._data = {};
+
+        this._states = Object.create(null);
+        this._globalKey = null;
     }
 
-    getCanvas(key = this.key) {
-        return this.getContext(key)?.canvas;
+    getViewerId(viewer = VIEWER) {
+        return viewer?.uniqueId || viewer?.id || "default";
     }
 
-    getContext(key = this.key) {
-        let context = this.records[key];
-        if (!context) {
-            const canvas = document.createElement("canvas");
-            context = canvas.getContext("2d", { alpha: true });
-            canvas.style.width = "100%";
-            canvas.style.height = "100%";
-            canvas.style.opacity = "1.0";
-            this.records[key] = context;
-        }
-        return context;
+    getStateKey(viewer = VIEWER) {
+        return `${this._globalKey}::${this.getViewerId(viewer)}`;
     }
 
-    getData(key = this.key) {
-        if (!this._data[key]) this._data[key] = [];
-        return this._data[key];
+    getState(viewer = VIEWER) {
+        if (!viewer || !this._globalKey) return null;
+
+        const key = this.getStateKey(viewer);
+        let state = this._states[key];
+        if (state) return state;
+
+        const canvas = document.createElement("canvas");
+        const recordCtx = canvas.getContext("2d", { alpha: true });
+        if (!recordCtx) return null;
+
+        canvas.style.width = "100%";
+        canvas.style.height = "100%";
+        canvas.style.opacity = "1.0";
+
+        state = this._states[key] = {
+            key,
+            viewerId: this.getViewerId(viewer),
+            viewer,
+            canvas,
+            recordCtx,
+            data: [],
+            activeVisit: null,
+            overlayAdded: false,
+            trackerAttached: false,
+            navigatorBounds: null,
+        };
+
+        return state;
     }
 
-    refresh() {
-        this.key = APPLICATION_CONTEXT.sessionName;
-        this.recordCtx = this.getContext();
-        this.record = this.recordCtx.canvas;
-        const bounds = this.refreshCanvas();
-        this.recordCtx.clearRect(0, 0, this.record.width, this.record.height);
-        this.recordCtx.globalCompositeOperation = "source-over";
-        return bounds;
-    }
-
-    refreshCanvas(canvas = this.record) {
-        // todo support BG swaps, IO
-        const homeBounds = VIEWER.viewport.getHomeBounds();
-        homeBounds.width += 2 * homeBounds.x;
-        homeBounds.height += 2 * homeBounds.y;
-        homeBounds.x = 0;
-        homeBounds.y = 0;
-        canvas.width = Math.max(1, Math.round(this.canvasWidth * homeBounds.width));
-        canvas.height = Math.max(1, Math.round(this.canvasWidth * homeBounds.height));
-        return homeBounds;
-    }
-
-    exportToFile() {
-        this.flushActiveVisit(Date.now());
-        UTILITIES.downloadAsFile("navigator.json", JSON.stringify(this.getData()));
+    getData(viewer = VIEWER) {
+        return this.getState(viewer)?.data || [];
     }
 
     clamp(value, min = 0, max = 1) {
@@ -67,10 +61,64 @@ addPlugin("nav-tracker", class extends XOpatPlugin {
         return Math.abs(a.x - b.x) < eps &&
             Math.abs(a.y - b.y) < eps &&
             Math.abs(a.width - b.width) < eps &&
-            Math.abs(a.height - b.height) < eps;
+            Math.abs(a.height - b.height) < eps &&
+            Math.abs((a.rotation || 0) - (b.rotation || 0)) < eps;
     }
 
-    getNormalizedZoom(viewport = VIEWER.viewport) {
+    refreshCanvas(viewer = VIEWER, canvas) {
+        if (!viewer?.viewport || !canvas) return null;
+
+        const homeBounds = viewer.viewport.getHomeBounds();
+        homeBounds.width += 2 * homeBounds.x;
+        homeBounds.height += 2 * homeBounds.y;
+        homeBounds.x = 0;
+        homeBounds.y = 0;
+
+        canvas.width = Math.max(1, Math.round(this.canvasWidth * homeBounds.width));
+        canvas.height = Math.max(1, Math.round(this.canvasWidth * homeBounds.height));
+        return homeBounds;
+    }
+
+    refreshViewer(viewer = VIEWER) {
+        const state = this.getState(viewer);
+        if (!state) return null;
+
+        state.viewer = viewer;
+        state.navigatorBounds = this.refreshCanvas(viewer, state.canvas);
+        state.recordCtx.clearRect(0, 0, state.canvas.width, state.canvas.height);
+        state.recordCtx.globalCompositeOperation = "source-over";
+        return state.navigatorBounds;
+    }
+
+    ensureOverlay(viewer = VIEWER) {
+        const state = this.getState(viewer);
+        if (!state?.navigatorBounds || state.overlayAdded || !viewer?.navigator) return;
+
+        viewer.navigator.addOverlay({
+            element: state.canvas,
+            location: state.navigatorBounds,
+        });
+        state.overlayAdded = true;
+
+        if (!state.trackerAttached) {
+            new OpenSeadragon.MouseTracker({
+                element: state.canvas,
+                enterHandler: e => {
+                    if (e?.originalEvent?.target?.style) {
+                        e.originalEvent.target.style.opacity = "0.35";
+                    }
+                },
+                leaveHandler: e => {
+                    if (e?.originalEvent?.target?.style) {
+                        e.originalEvent.target.style.opacity = "1.0";
+                    }
+                },
+            });
+            state.trackerAttached = true;
+        }
+    }
+
+    getNormalizedZoom(viewport) {
         if (!viewport) return 0;
 
         const zoom = viewport.getZoom(true);
@@ -85,30 +133,35 @@ addPlugin("nav-tracker", class extends XOpatPlugin {
         return this.clamp(zoomLog / maxZoomLog);
     }
 
-    getViewportSnapshot(now = Date.now()) {
-        const viewport = VIEWER.viewport;
+    getViewportSnapshot(viewer = VIEWER, now = Date.now()) {
+        const viewport = viewer?.viewport;
         if (!viewport) return null;
 
         const bounds = viewport.getBoundsNoRotate(true);
+        const rotation = viewport.getRotation ? viewport.getRotation() : 0;
         const size = this.canvasWidth;
+
         return {
+            viewerId: this.getViewerId(viewer),
             bounds: {
                 x: bounds.x,
                 y: bounds.y,
                 width: bounds.width,
-                height: bounds.height
+                height: bounds.height,
+                rotation,
             },
             rect: {
                 x: size * bounds.x,
                 y: size * bounds.y,
                 width: size * bounds.width,
-                height: size * bounds.height
+                height: size * bounds.height,
             },
+            rotation,
             startedAt: now,
             endedAt: now,
             duration: 0,
             zoom: viewport.getZoom(true),
-            zoomOpacity: this.getNormalizedZoom(viewport)
+            zoomOpacity: this.getNormalizedZoom(viewport),
         };
     }
 
@@ -117,16 +170,8 @@ addPlugin("nav-tracker", class extends XOpatPlugin {
         return {
             ...visit,
             endedAt,
-            duration: Math.max(0, endedAt - visit.startedAt)
+            duration: Math.max(0, endedAt - visit.startedAt),
         };
-    }
-
-    flushActiveVisit(endedAt = Date.now()) {
-        if (!this._activeVisit) return null;
-        const visit = this.finalizeVisit(this._activeVisit, endedAt);
-        this.getData().push(visit);
-        this._activeVisit = null;
-        return visit;
     }
 
     getSequentialColor(value, maxValue) {
@@ -134,7 +179,7 @@ addPlugin("nav-tracker", class extends XOpatPlugin {
             [255, 245, 235],
             [253, 190, 133],
             [239, 101, 72],
-            [153, 52, 4]
+            [153, 52, 4],
         ];
 
         const safeMax = Math.max(1, maxValue);
@@ -159,91 +204,185 @@ addPlugin("nav-tracker", class extends XOpatPlugin {
         return `rgba(${r}, ${g}, ${b}, ${alpha.toFixed(3)})`;
     }
 
-    redraw(now = Date.now()) {
-        if (!this.recordCtx || !this.record) return;
+    drawCommittedVisit(viewer, visit, maxDuration = visit.duration || 1) {
+        const state = this.getState(viewer);
+        if (!state?.recordCtx || !visit?.rect) return;
 
-        const visits = this.getData();
-        const activeVisit = this._activeVisit ? this.finalizeVisit(this._activeVisit, now) : null;
+        const ctx = state.recordCtx;
+        const { x, y, width, height } = visit.rect;
+
+        const currentRotation = viewer?.viewport?.getRotation ? viewer.viewport.getRotation() : 0;
+        const visitRotation = visit.rotation || 0;
+        const delta = ((visitRotation - currentRotation) * Math.PI) / 180;
+
+        ctx.save();
+        ctx.translate(x + width / 2, y + height / 2);
+        ctx.rotate(delta);
+        ctx.fillStyle = this.getVisitFillStyle(visit, maxDuration);
+        ctx.fillRect(-width / 2, -height / 2, width, height);
+        ctx.restore();
+    }
+
+    flushActiveVisit(viewer = VIEWER, endedAt = Date.now()) {
+        const state = this.getState(viewer);
+        if (!state?.activeVisit) return null;
+
+        const visit = this.finalizeVisit(state.activeVisit, endedAt);
+        state.data.push(visit);
+        state.activeVisit = null;
+
+        this.drawCommittedVisit(viewer, visit, visit.duration || 1);
+        return visit;
+    }
+
+    handleViewportUpdate(viewer = VIEWER) {
+        const state = this.getState(viewer);
+        if (!state) return;
+
+        const now = Date.now();
+        const snapshot = this.getViewportSnapshot(viewer, now);
+        if (!snapshot) return;
+
+        if (!state.activeVisit) {
+            state.activeVisit = snapshot;
+            return;
+        }
+
+        if (this.sameBounds(state.activeVisit.bounds, snapshot.bounds)) {
+            state.activeVisit.zoom = snapshot.zoom;
+            state.activeVisit.zoomOpacity = snapshot.zoomOpacity;
+            state.activeVisit.endedAt = now;
+            return;
+        }
+
+        this.flushActiveVisit(viewer, now);
+        state.activeVisit = snapshot;
+    }
+
+    drawVisit(recordCtx, visit, maxDuration, currentRotation = 0) {
+        if (!recordCtx || !visit?.rect) return;
+
+        const { x, y, width, height } = visit.rect;
+        const visitRotation = visit.rotation || 0;
+        const delta = (visitRotation * Math.PI) / 180;
+
+        recordCtx.save();
+        recordCtx.translate(x + width / 2, y + height / 2);
+        recordCtx.rotate(delta);
+        recordCtx.fillStyle = this.getVisitFillStyle(visit, maxDuration);
+        recordCtx.fillRect(-width / 2, -height / 2, width, height);
+        recordCtx.restore();
+    }
+
+    redraw(viewer = VIEWER, now = Date.now()) {
+        const state = this.getState(viewer);
+        if (!state?.recordCtx || !state.canvas) return;
+
+        const visits = state.data;
+        const activeVisit = state.activeVisit ? this.finalizeVisit(state.activeVisit, now) : null;
         const maxDuration = Math.max(
             1,
             ...visits.map(visit => visit.duration || 0),
-            activeVisit?.duration || 0
+            activeVisit?.duration || 0,
         );
 
-        this.recordCtx.clearRect(0, 0, this.record.width, this.record.height);
-        this.recordCtx.globalCompositeOperation = "source-over";
+        const ctx = state.recordCtx;
+        const currentRotation = viewer?.viewport?.getRotation ? viewer.viewport.getRotation() : 0;
+
+        ctx.clearRect(0, 0, state.canvas.width, state.canvas.height);
+        ctx.globalCompositeOperation = "source-over";
 
         for (const visit of visits) {
-            this.recordCtx.fillStyle = this.getVisitFillStyle(visit, maxDuration);
-            this.recordCtx.fillRect(visit.rect.x, visit.rect.y, visit.rect.width, visit.rect.height);
+            this.drawVisit(ctx, visit, maxDuration, currentRotation);
         }
 
         if (activeVisit) {
-            this.recordCtx.fillStyle = this.getVisitFillStyle(activeVisit, maxDuration);
-            this.recordCtx.fillRect(activeVisit.rect.x, activeVisit.rect.y, activeVisit.rect.width, activeVisit.rect.height);
+            this.drawVisit(ctx, activeVisit, maxDuration, currentRotation);
         }
     }
 
-    handleViewportUpdate() {
-        const now = Date.now();
-        const snapshot = this.getViewportSnapshot(now);
-        if (!snapshot) return;
+    attachViewer(viewer) {
+        if (!viewer?.viewport) return;
 
-        if (!this._activeVisit) {
-            this._activeVisit = snapshot;
-        } else if (this.sameBounds(this._activeVisit.bounds, snapshot.bounds)) {
-            this._activeVisit.zoom = snapshot.zoom;
-            this._activeVisit.zoomOpacity = snapshot.zoomOpacity;
-            this._activeVisit.endedAt = now;
-        } else {
-            this.flushActiveVisit(now);
-            this._activeVisit = snapshot;
-        }
+        const state = this.getState(viewer);
+        if (!state) return;
+
+        this.refreshViewer(viewer);
 
         if (this.getOption("animate", this.animates)) {
-            this.redraw(now);
+            this.ensureOverlay(viewer);
         }
+
+        this.handleViewportUpdate(viewer);
+    }
+
+    destroyViewerState(viewer) {
+        const state = this.getState(viewer);
+        if (!state) return;
+
+        this.flushActiveVisit(viewer, Date.now());
+
+        try {
+            if (state.overlayAdded) {
+                viewer.navigator?.removeOverlay?.(state.canvas);
+            }
+        } catch (e) {
+            console.warn("nav-tracker: failed to remove navigator overlay", e);
+        }
+
+        delete this._states[state.key];
+    }
+
+    exportToFile() {
+        const exportedAt = Date.now();
+        const payload = {};
+
+        for (const viewer of (VIEWER_MANAGER?.viewers || []).filter(Boolean)) {
+            const state = this.getState(viewer);
+            if (!state) continue;
+            this.flushActiveVisit(viewer, exportedAt);
+            payload[state.viewerId] = state.data;
+        }
+
+        UTILITIES.downloadAsFile("navigator.json", JSON.stringify(payload, null, 2));
     }
 
     pluginReady() {
-        const bounds = this.refresh();
-        if (!bounds) return;
+        this._globalKey = APPLICATION_CONTEXT.sessionName;
 
-        this.data = this.getData();
         const animate = this.getOption("animate", this.animates);
-
-        if (animate) {
-            const outputCanvas = this.record;
-
-            new OpenSeadragon.MouseTracker({
-                element: outputCanvas,
-                enterHandler: e => e.originalEvent.target.style.opacity = "0.35",
-                leaveHandler: e => e.originalEvent.target.style.opacity = "1.0",
-            });
-
-            if (!this._overlayAdded) {
-                VIEWER.navigator.addOverlay({
-                    element: outputCanvas,
-                    location: bounds,
-                });
-                this._overlayAdded = true;
-            }
-        } else {
+        if (!animate) {
             USER_INTERFACE.AppBar.Plugins.setMenu(this.id, "navigator-export", "Export/Import",
                 `<h3 class="f2-light">Navigator tracking IO </h3>
         <button id="downloadAnnotation" onclick="${this.THIS}.exportToFile();return false;" class="btn">Download as a file.</button>`);
+        } else {
+            VIEWER_MANAGER.broadcastHandler("animation-finish", (e) => {
+                this.handleViewportUpdate(e.eventSource);
+            });
         }
 
-        VIEWER.addHandler("update-viewport", () => {
-            this.handleViewportUpdate();
+        VIEWER_MANAGER.broadcastHandler("open", (e) => {
+            this.attachViewer(e.eventSource);
         });
 
-        VIEWER.addHandler("animation-finish", () => {
-            if (this._activeVisit && animate) {
-                this.redraw(Date.now());
+        VIEWER_MANAGER.broadcastHandler("destroy", (e) => {
+            this.destroyViewerState(e.eventSource);
+        });
+
+        VIEWER_MANAGER.broadcastHandler("update-viewport", (e) => {
+            const viewer = e.eventSource;
+            const state = this.getState(viewer);
+            if (!state) return;
+
+            this.handleViewportUpdate(viewer);
+
+            if (state.activeVisit && animate) {
+                this.redraw(viewer, Date.now());
             }
         });
 
-        this.handleViewportUpdate();
+        for (const viewer of (VIEWER_MANAGER?.viewers || [VIEWER]).filter(Boolean)) {
+            this.attachViewer(viewer);
+        }
     }
 });

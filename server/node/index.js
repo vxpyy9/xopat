@@ -25,6 +25,20 @@ const languageServerConf = getI18NData(language);
 languageServerConf.fallbackLng = 'en';
 i18n.init(languageServerConf);
 
+function readStartupVersion(defaultVersion = "dev") {
+    try {
+        const pkgPath = path.join(constants._ABSPATH_NO_SLASH || constants.ABSPATH, "package.json");
+        if (!fs.existsSync(pkgPath)) return defaultVersion;
+
+        const pkg = JSON.parse(fs.readFileSync(pkgPath, { encoding: "utf8", flag: "r" }));
+        return pkg.version || defaultVersion;
+    } catch (e) {
+        console.warn(`Failed to read package.json version, falling back to '${defaultVersion}':`, e.message);
+        return defaultVersion;
+    }
+}
+
+const STARTUP_VERSION = readStartupVersion();
 
 const sessions = new Map();
 const serverRuntime = new XopatServerRuntime({
@@ -90,13 +104,13 @@ function createSession(res) {
     return session;
 }
 
-
 const initViewerCoreAndPlugins = (req, res, serverOnly=false) => {
     const core = getCore(constants.ABSPATH, PROJECT_PATH,
         fs.existsSync,
         path => fs.readFileSync(path, { encoding: 'utf8', flag: 'r' }),
         key => process.env[key],
-        !serverOnly // secure only when not on server
+        !serverOnly, // secure only when not on server
+        { version: STARTUP_VERSION }
     );
 
     if (throwFatalErrorIf(core, res, core.exception, "Failed to parse the CORE initialization!", core.exception)) return null;
@@ -137,21 +151,31 @@ function getI18NData(language) {
     }
 }
 
-async function responseStaticFile(req, res, targetPath) {
-    //taken from https://stackoverflow.com/questions/28061080/node-itself-can-serve-static-files-without-express-or-any-other-module
+async function responseStaticFile(req, res, targetPath, urlObj) {
     const contentType = utils.mimeOf(targetPath);
+    const version = urlObj?.searchParams?.get("v") || urlObj?.searchParams?.get("version");
+
     fs.readFile(targetPath, (err, content) => {
         if (err) {
             res.writeHead(500);
             res.end(`Sorry, check with the site admin for error: ${err.code}`);
-        } else {
-            const head = { 'Content-Type': contentType };
-            // Threading for WASM requires all resources to comply: this is not often doable due to external image servers
-            // head['Cross-Origin-Opener-Policy'] = 'same-origin';
-            // head['Cross-Origin-Embedder-Policy'] = 'require-corp';
-            res.writeHead(200, head);
-            res.end(content, 'utf-8');
+            return;
         }
+
+        const headers = {
+            "Content-Type": contentType
+        };
+
+        if (version) {
+            headers["Cache-Control"] = "public, max-age=31536000, immutable";
+        } else {
+            headers["Cache-Control"] = "no-store, no-cache, must-revalidate";
+            headers["Pragma"] = "no-cache";
+            headers["Expires"] = "0";
+        }
+
+        res.writeHead(200, headers);
+        res.end(content);
     });
 }
 
@@ -427,7 +451,7 @@ const server = http.createServer(async (req, res) => {
         if (urlObj.pathname.match(/.+\..{2,5}$/g)) {
             const possibleFilePath = constants._ABSPATH_NO_SLASH + urlObj.pathname;
             if (fs.existsSync(possibleFilePath)) {
-                return responseStaticFile(req, res, possibleFilePath);
+                return responseStaticFile(req, res, possibleFilePath, urlObj);
             }
             res.writeHead(404);
             res.end();

@@ -15,6 +15,7 @@ export class MobileBottomBar {
     }
 
     init() {
+        this._breakpoint = APPLICATION_CONTEXT.getOption("maxMobileWidthPx");
         this.context = document.getElementById("bottom-container");
         if (!this.context) {
             console.warn("MobileBottomBar: #bottom-container not found.");
@@ -29,7 +30,7 @@ export class MobileBottomBar {
         this.context.style.height = "auto";
 
         window.addEventListener("app:layout-change", (e) => {
-            this.onLayoutChange?.(e.detail || { width: window.innerWidth });
+            this.onLayoutChange(e.detail || { width: window.innerWidth });
         });
 
         window.addEventListener("pointerdown", this._syncBound, true);
@@ -41,9 +42,7 @@ export class MobileBottomBar {
         }
 
         this.sync();
-        window.dispatchEvent(new CustomEvent("app:layout-change", {
-            detail: { width: window.innerWidth }
-        }));
+        this.onLayoutChange({ width: window.innerWidth });
     }
 
     destroy() {
@@ -174,9 +173,9 @@ export class MobileBottomBar {
     onLayoutChange(details) {
         const width = details?.width ?? window.innerWidth;
         if (!this.context) return;
-        this.context.style.height = width < 600 ? "auto" : "0px";
-        this.context.style.overflow = width < 600 ? "visible" : "hidden";
-        if (width >= 600) {
+        this.context.style.height = width < this._breakpoint ? "auto" : "0px";
+        this.context.style.overflow = width < this._breakpoint ? "visible" : "hidden";
+        if (width >= this._breakpoint) {
             this._closeViewerPicker();
             this._setActivePanel(null);
         }

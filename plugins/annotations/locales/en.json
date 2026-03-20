@@ -81,7 +81,7 @@
       "title": "Metrics",
       "presetLabel": "Preset",
       "compute": "Compute",
-      "helperText": "Area in unit², length in unit (aggregate per preset).",
+      "helperText": "Area in unit\u00b2, length in unit (aggregate per preset).",
       "metrics": {
         "area": "Area",
         "length": "Length"
@@ -98,6 +98,12 @@
       "resultId": "Result id",
       "pick": "(pick)",
       "unitMismatch": "Unit mismatch ({{a}} vs {{b}})"
+    },
+    "board": {
+      "title": "Annotation list",
+      "createLayer": "Create layer",
+      "deleteSelection": "Delete selection",
+      "refresh": "Refresh list"
     }
   },
   "common": {

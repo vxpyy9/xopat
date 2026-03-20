@@ -65,7 +65,6 @@ export class BaseComponent {
     constructor(options, ...children) {
 
         window.addEventListener('app:layout-change', (e) => {
-            // Každá komponenta se sama rozhodne, co udělá
             this.onLayoutChange?.(e.detail);
         });
 

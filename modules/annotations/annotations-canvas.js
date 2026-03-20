@@ -15,6 +15,11 @@ OSDAnnotations.FabricWrapper = class extends XOpatViewerSingleton {
         this.__selectionSnapshot = [];
         this.__programmaticClear = false;   // to avoid firing clear selection events from fabric on empty clicks
 
+        this._boardOrder = [];
+        this._boardEditSelection = undefined;
+        this.focusWithScreen = true;
+
+
         this._trackedDoppelGangers = {};
         this._dopperlGangerCount = 0;
         // todo move layers functionality?
@@ -163,7 +168,7 @@ OSDAnnotations.FabricWrapper = class extends XOpatViewerSingleton {
      * @return Promise((string|object)) serialized data or object of serialized annotations and presets (if applicable)
      */
     async export(options={}, withAnnotations=true, withPresets=true) {
-        if (this.module.historyManager.isOngoingEdit()) this.module.historyManager._boardItemSave();
+        this.requestBoardSave();
 
         options = $.extend(true, {}, this.module.getExportOptions(), options);
         //prevent immediate serialization as we feed it to a merge immediately, -> we don't reuse exportPartial(..)
@@ -269,7 +274,12 @@ OSDAnnotations.FabricWrapper = class extends XOpatViewerSingleton {
         }
 
         if (imported) {
-            this.module.historyManager.refresh();
+            // todo event name/logic
+            this.raiseEvent('annotation-board-refresh-request', {
+                viewer: this.viewer,
+                clear,
+                reason: 'import'
+            });
         }
 
         this.module.raiseEvent('import', {
@@ -553,14 +563,56 @@ OSDAnnotations.FabricWrapper = class extends XOpatViewerSingleton {
         return this._layers ? Object.values(this._layers) : [];
     }
 
+    getBoardItemIndex(type, id) {
+        return this._boardOrder.findIndex(
+            item => item.type === type && String(item.id) === String(id)
+        );
+    }
+
+    upsertBoardItem(type, id, index = undefined) {
+        if (!type || id === undefined || id === null) return -1;
+
+        const entry = { type, id: String(id) };
+        const currentIndex = this.getBoardItemIndex(type, id);
+
+        if (currentIndex !== -1) {
+            if (!Number.isInteger(index) || index === currentIndex) return currentIndex;
+            this._boardOrder.splice(currentIndex, 1);
+        }
+
+        const targetIndex = Number.isInteger(index)
+            ? Math.max(0, Math.min(index, this._boardOrder.length))
+            : this._boardOrder.length;
+
+        this._boardOrder.splice(targetIndex, 0, entry);
+        return targetIndex;
+    }
+
+    replaceBoardItem(type, previousId, nextId, index = undefined) {
+        this.removeBoardItem(type, previousId);
+        return this.upsertBoardItem(type, nextId, index);
+    }
+
+    removeBoardItem(type, id) {
+        const index = this.getBoardItemIndex(type, id);
+        if (index !== -1) this._boardOrder.splice(index, 1);
+        return index;
+    }
+
+    clearBoardOrder() {
+        this._boardOrder = [];
+    }
+
+    getBoardOrder() {
+        return [...this._boardOrder];
+    }
+
     _serializeLayer(layerId) {
         const layer = this.getLayer(layerId);
         if (!layer) return null;
 
         const data = layer.toObject();
-        if (this.module.historyManager) {
-            data.position = this.module.historyManager.getBoardIndex('layer', layerId);
-        }
+        data.position = this.getBoardItemIndex('layer', layerId);
         return data;
     }
 
@@ -709,7 +761,7 @@ OSDAnnotations.FabricWrapper = class extends XOpatViewerSingleton {
                 const layer = this.getLayer(obj.layerID);
                 obj._position = layer ? layer.getAnnotationIndex(obj) : undefined;
             } else {
-                obj._position = this.module.historyManager.getBoardIndex('annotation', obj.incrementId);
+                obj._position = this.getRootAnnotationIndex(obj);
             }
         }
         targetAnnots.sort((a, b) => (a._position ?? 0) - (b._position ?? 0));
@@ -722,17 +774,98 @@ OSDAnnotations.FabricWrapper = class extends XOpatViewerSingleton {
         return true;
     }
 
-    /**
-     * Focus object without highlighting the focus within the board
-     * @param {object|fabric.Object} object
-     * @param {number|undefined} incremendId set to object id if highligh should take place and
-     * 	focus item is not an instance of fabric.Object
-     */
-    focusObjectOrArea(object, incremendId=undefined) {
-        if (object.incrementId) {
-            object = this.module.historyManager._getFocusBBox(object);
+    isOngoingEditOf(ofObject) {
+        return !!(
+            this._boardEditSelection &&
+            this._boardEditSelection.incrementId === ofObject?.incrementId
+        );
+    }
+
+    isOngoingEdit() {
+        return !!(
+            this._boardEditSelection &&
+            this._boardEditSelection.incrementId !== undefined &&
+            this._boardEditSelection.incrementId !== null
+        );
+    }
+
+    beginBoardEdit(object) {
+        if (!object) return;
+        this._boardEditSelection = {
+            incrementId: object.incrementId,
+            internalID: object.internalID
+        };
+    }
+
+    endBoardEdit() {
+        this._boardEditSelection = undefined;
+    }
+
+    requestBoardSave() {
+        this.raiseEvent('annotation-board-save-request', { viewer: this.viewer });
+        this.module.raiseEvent('annotation-board-save-request', { viewer: this.viewer });
+    }
+
+    getFocusBBox(of, factory = undefined) {
+        factory = factory || this.module.getAnnotationObjectFactory(of.factoryID);
+        if (factory) {
+            return factory.getObjectFocusZone(of);
         }
-        this.module.historyManager._focus(object, incremendId);
+
+        const center = of.getCenterPoint();
+        return { left: center.x, top: center.y, width: 0, height: 0 };
+    }
+
+    focusArea(bbox, incrementId = undefined, adjustZoom = true) {
+        bbox.left = Number.parseFloat(bbox.left ?? bbox.x);
+        bbox.top = Number.parseFloat(bbox.top ?? bbox.y);
+
+        let targetObj;
+        if (incrementId !== undefined) {
+            targetObj = this.findObjectOnCanvasByIncrementId(incrementId);
+            if (targetObj) {
+                this.highlightAnnotation(targetObj);
+
+                if (!Number.isFinite(bbox.left) || !Number.isFinite(bbox.top)) {
+                    console.warn("Annotation focus BBOX undefined: try to recompute.");
+                    bbox = targetObj.getBoundingRect(true, true);
+                }
+            }
+        }
+
+        const viewer = this.viewer;
+        if (!this.focusWithScreen || !Number.isFinite(bbox.left) || !Number.isFinite(bbox.top)) {
+            return targetObj;
+        }
+
+        if (adjustZoom && bbox.width > 0 && bbox.height > 0) {
+            const offX = bbox.width;
+            const offY = bbox.height;
+            const target = viewer.scalebar.getReferencedTiledImage().imageToViewportRectangle(
+                bbox.left - offX * 2,
+                bbox.top - offY * 2,
+                bbox.width + offX * 4,
+                bbox.height + offY * 4
+            );
+            viewer.tools.focus({ bounds: target });
+        } else {
+            const cx = bbox.left + bbox.width / 4;
+            const cy = bbox.top + bbox.height / 4;
+            const target = viewer.scalebar.getReferencedTiledImage().imageToViewportCoordinates(
+                new OpenSeadragon.Point(cx, cy)
+            );
+            viewer.viewport.panTo(target, false);
+            viewer.viewport.applyConstraints();
+        }
+
+        return targetObj;
+    }
+
+    focusObjectOrArea(object, incremendId=undefined, adjustZoom=true) {
+        if (object?.incrementId !== undefined) {
+            object = this.getFocusBBox(object);
+        }
+        return this.focusArea(object, incremendId, adjustZoom);
     }
 
 
@@ -790,7 +923,7 @@ OSDAnnotations.FabricWrapper = class extends XOpatViewerSingleton {
 
         this.canvas.remove(annotation);
         this.removeAnnotationFromLayer(annotation);
-        this.module.historyManager.removeAnnotationFromBoard(annotation);
+        if (!annotation.layerID) this.removeBoardItem('annotation', annotation.incrementId);
         this.canvas.requestRenderAll();
 
         if (_raise) {
@@ -817,8 +950,9 @@ OSDAnnotations.FabricWrapper = class extends XOpatViewerSingleton {
         this.updateSingleAnnotationVisuals(annotation);
         this.addAnnotationToLayer(annotation, layerIndex);
 
-        if (!_dangerousSkipHistory) this.module.historyManager.addAnnotationToBoard(annotation, undefined, boardIndex);
-        //this.clearAnnotationSelection(true);
+        if (!_dangerousSkipHistory && !annotation.layerID) {
+            this.upsertBoardItem('annotation', annotation.incrementId, boardIndex);
+        }
         this.selectAnnotation(annotation, true, true);
 
         if (_raise) this.raiseEvent('annotation-create', {object: annotation});
@@ -840,17 +974,19 @@ OSDAnnotations.FabricWrapper = class extends XOpatViewerSingleton {
             this.removeAnnotationFromLayer(previous);
             this.addAnnotationToLayer(next, layerIndex);
         } else {
-            boardIndex = this.module.historyManager.getBoardIndex('annotation', previous.incrementId);
+            boardIndex = this.getBoardItemIndex('annotation', previous.incrementId);
         }
 
         this.canvas.remove(previous);
         this.canvas.add(next);
 
         if (updateUI) {
-            this.module.historyManager.addAnnotationToBoard(next, previous, boardIndex);
+            if (!next.layerID) {
+                this.replaceBoardItem('annotation', previous.incrementId, next.incrementId, boardIndex);
+            }
 
             this.selectAnnotation(next, true, true);
-            this.raiseEvent('annotation-replace', {previous, next});
+            this.raiseEvent('annotation-replace', {previous, next, boardIndex});
         }
 
         this.canvas.requestRenderAll();
@@ -865,7 +1001,7 @@ OSDAnnotations.FabricWrapper = class extends XOpatViewerSingleton {
 
         this._layers[layerData.id] = restoredLayer;
         const boardIndex = restoredLayer.hasOwnProperty("position") ? restoredLayer.position : undefined;
-        this.module.historyManager.addLayerToBoard(restoredLayer, boardIndex);
+        this.upsertBoardItem('layer', restoredLayer.id, boardIndex);
 
         for (let obj of layerData._objects) {
             this._addAnnotation(obj, false);
@@ -883,7 +1019,7 @@ OSDAnnotations.FabricWrapper = class extends XOpatViewerSingleton {
             this._deleteAnnotation(obj, false);
         }
 
-        this.module.historyManager.removeLayerFromBoard(layer);
+        this.removeBoardItem('layer', layer.id);
         delete this._layers[layerId];
         this._selectedLayers.delete(layerId);
 
@@ -1391,7 +1527,7 @@ OSDAnnotations.FabricWrapper = class extends XOpatViewerSingleton {
                 const layer = this.getLayer(obj.layerID);
                 obj._position = layer ? layer.getAnnotationIndex(obj) : undefined;
             } else {
-                obj._position = this.module.historyManager.getBoardIndex('annotation', obj.incrementId);
+                obj._position = this.getBoardItemIndex('annotation', obj.incrementId);
             }
         }
 
@@ -1820,7 +1956,7 @@ OSDAnnotations.FabricWrapper = class extends XOpatViewerSingleton {
                 return;
             }
 
-            if (this.module.historyManager.isOngoingEditOf(clickedObject)) {
+            if (this.isOngoingEditOf(clickedObject)) {
                 if (this.module.isMouseOSDInteractive()) {
                     // todo this should be hidden in factory api
                     clickedObject.set({
@@ -1933,7 +2069,7 @@ OSDAnnotations.FabricWrapper = class extends XOpatViewerSingleton {
         return fabric.util.enlivenObjects(nonFabricObjects, objects => {
             if (clear) {
                 this.canvas.clear();
-                this.module.historyManager.clearBoard();
+                this.clearBoardOrder();
                 this._layers = {};
                 this._layer = undefined;
                 this.clearAnnotationSelection(true);
@@ -1950,6 +2086,9 @@ OSDAnnotations.FabricWrapper = class extends XOpatViewerSingleton {
 
                 self.module.checkAnnotation(obj, zoom, graphicZoom);
                 _this.insertAt(obj, insertion++);
+                if (!obj.layerID) {
+                    self.upsertBoardItem('annotation', obj.incrementId);
+                }
             }
 
             for (let obj of objects) {
@@ -1960,7 +2099,12 @@ OSDAnnotations.FabricWrapper = class extends XOpatViewerSingleton {
             for (let obj of fabricObjects) {
                 initObject(obj);
             }
-            self.module.historyManager.assignIDs(_this.getObjects());
+            self.module.assignAnnotationIds(_this.getObjects());
+            self.raiseEvent('annotation-board-refresh-request', {
+                viewer: self.viewer,
+                clear,
+                reason: 'load-objects'
+            });
         });
     }
 

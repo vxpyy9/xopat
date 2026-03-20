@@ -447,10 +447,7 @@ export function initXOpat(PLUGINS: Record<string, XOpatElementItem>, MODULES: Re
         id: "viewer-container",
         position: "right",
         initialWidth: 360,
-        // tabs: [
-        //     { id: "layers", icon: "fa-layer-group", title: "Layers", body: ["…"] },
-        //     { id: "measure", icon: "fa-ruler",       title: "Measure", body: ["…"] }
-        // ]
+        collapseBreakpointPx: APPLICATION_CONTEXT.getOption("maxMobileWidthPx", null),
     });
     // Attach once (replaces your static HTML wrapper)
     (window.LAYOUT as any).attachTo(document.getElementById("middle-container"));
