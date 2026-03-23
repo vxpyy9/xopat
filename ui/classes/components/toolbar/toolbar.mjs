@@ -70,6 +70,7 @@ class Toolbar extends BaseComponent {
         this._dir = "horizontal";
         this._edgeThreshold = Number.isFinite(options.edgeThreshold) ? Number(options.edgeThreshold) : 96;
         this._horizontalOnly = !!options.horizontalOnly;
+        this._mobileBreakpoint = Number(APPLICATION_CONTEXT.getOption("maxMobileWidthPx")) || 600;
 
         const wMin = this.options.horizontalOnly ? "min-w-max" : "";
         this.classMap["base"] = `draggable flex flex-col bg-transparent pointer-events-none ${wMin} ${this.options.pluginRootClass || ""}`;
@@ -443,7 +444,7 @@ class Toolbar extends BaseComponent {
         }
 
         // --- orientation: vertical near a side edge, else horizontal ---
-        if (this._horizontalOnly || window.innerWidth < 600) {
+        if (this._horizontalOnly || window.innerWidth < this._mobileBreakpoint) {
             this._setOrientation("horizontal", force);
             return;
         }
@@ -489,13 +490,16 @@ class Toolbar extends BaseComponent {
 
     onLayoutChange(details) {
         const root = this._outerEl;
-        if (details.width < 600) {
+        if (!root) return;
+        const width = details?.width ?? window.innerWidth;
+
+        if (width < this._mobileBreakpoint) {
             this.setClass("mobile", "mobile");
-            root.querySelector(".handle")?.classList.add("hidden")
+            root.querySelector(".handle")?.classList.add("hidden");
             this._setOrientation("horizontal", true);
         } else {
             this.setClass("mobile", "");
-            root.querySelector(".handle")?.classList.remove("hidden")
+            root.querySelector(".handle")?.classList.remove("hidden");
             this._setOrientation("horizontal", false);
         }
     }

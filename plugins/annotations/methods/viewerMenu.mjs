@@ -82,32 +82,22 @@ export const viewerMenuMethods = {
             }
         });
 
-        const boardRefresh = () => this._refreshAllBoardPanels();
-        const sideRefresh = () => {
+        const globalSideRefresh = () => {
             this._refreshAllBoardPanels();
             this._refreshAllPresetLists();
             this._refreshAllAuthorLists();
         };
 
-        this.context.addFabricHandler('layer-selection-changed', boardRefresh);
-        this.context.addFabricHandler('active-layer-changed', boardRefresh);
-        this.context.addFabricHandler('annotation-selection-changed', boardRefresh);
-        this.context.addFabricHandler('layer-objects-changed', sideRefresh);
-        this.context.addHandler('annotation-preset-change', sideRefresh);
-        this.context.addHandler('annotation-create', sideRefresh);
-        this.context.addHandler('annotation-delete', sideRefresh);
-        this.context.addHandler('annotation-replace', sideRefresh);
-        this.context.addHandler('import', sideRefresh);
-        this.context.addHandler('layer-added', sideRefresh);
-        this.context.addHandler('layer-removed', sideRefresh);
+        this.context.addHandler('annotation-preset-change', globalSideRefresh);
+        this.context.addHandler('import', globalSideRefresh);
 
-        // as a last resort save by exporting to a file
         this.context.addHandler('save-annotations', async (e) => {
             await this.exportToFile();
             e.setHandled(this.t('annotations.export.downloadFallbackHandled'));
         }, null, -Infinity);
 
         VIEWER_MANAGER.addHandler('viewer-destroy', (e) => {
+            this._unbindViewerFabricEvents(e.uniqueId);
             const state = this._getViewerUI(e.uniqueId);
             state?.boardPanel?.destroy?.();
         });
@@ -121,8 +111,10 @@ export const viewerMenuMethods = {
             const fabric = this.context.getFabric(viewerId);
             if (fabric) fabric.focusWithScreen = this._focusWithZoom;
 
+            this._unbindViewerFabricEvents(viewerId);
             state.boardPanel?.destroy?.();
             state.boardPanel = new AnnotationBoardPanel(this, viewer);
+            this._bindViewerFabricEvents(viewerId);
 
             state.enableButton = iconButton('fa-eye', this.t('annotations.viewerMenu.toggleVisibility'), (e) => this._toggleEnabled(e.currentTarget));
             state.outlineButton = iconButton('fa-vector-square', this.t('annotations.viewerMenu.outlineOnly'), () => {
@@ -401,6 +393,68 @@ ${UIComponents.Elements.checkBox({ label: this.t('annotations.comments.autoOpen'
         this.context.addHandler('comments-control-clicked', () => this.commentsToggleWindow());
         this.context.addHandler('annotation-updated-comment', () => this._renderComments());
         this._toggleStrokeStyling(this.context.strokeStyling);
+    },
+
+    _bindViewerFabricEvents(viewerOrId) {
+        const viewerId = this._resolveViewerId(viewerOrId);
+        if (!viewerId) return;
+
+        const state = this.getViewerContext(viewerId);
+        const fabric = this.context.getFabric(viewerId);
+        if (!state || !fabric) return;
+
+        this._unbindViewerFabricEvents(viewerId);
+
+        const boardRefresh = () => {
+            this._getViewerUI(viewerId)?.boardPanel?.requestRender();
+        };
+
+        const sideRefresh = () => {
+            this._getViewerUI(viewerId)?.boardPanel?.requestRender();
+            this._refreshAllPresetLists();
+            this._refreshAllAuthorLists();
+        };
+
+        state._fabricEventBindings = {
+            fabric,
+            boardRefresh,
+            sideRefresh
+        };
+
+        fabric.addHandler('layer-selection-changed', boardRefresh);
+        fabric.addHandler('active-layer-changed', boardRefresh);
+        fabric.addHandler('annotation-selection-changed', boardRefresh);
+
+        fabric.addHandler('layer-objects-changed', sideRefresh);
+        fabric.addHandler('annotation-create', sideRefresh);
+        fabric.addHandler('annotation-delete', sideRefresh);
+        fabric.addHandler('annotation-replace', sideRefresh);
+        fabric.addHandler('layer-added', sideRefresh);
+        fabric.addHandler('layer-removed', sideRefresh);
+    },
+
+    _unbindViewerFabricEvents(viewerOrId) {
+        const viewerId = this._resolveViewerId(viewerOrId);
+        if (!viewerId) return;
+
+        const state = this.getViewerContext(viewerId);
+        const bindings = state?._fabricEventBindings;
+        if (!bindings?.fabric) return;
+
+        const { fabric, boardRefresh, sideRefresh } = bindings;
+
+        fabric.removeHandler?.('layer-selection-changed', boardRefresh);
+        fabric.removeHandler?.('active-layer-changed', boardRefresh);
+        fabric.removeHandler?.('annotation-selection-changed', boardRefresh);
+
+        fabric.removeHandler?.('layer-objects-changed', sideRefresh);
+        fabric.removeHandler?.('annotation-create', sideRefresh);
+        fabric.removeHandler?.('annotation-delete', sideRefresh);
+        fabric.removeHandler?.('annotation-replace', sideRefresh);
+        fabric.removeHandler?.('layer-added', sideRefresh);
+        fabric.removeHandler?.('layer-removed', sideRefresh);
+
+        delete state._fabricEventBindings;
     },
 
     switchMenuList(type, viewerOrId = undefined) {

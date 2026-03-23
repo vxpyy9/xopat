@@ -413,7 +413,7 @@ OSDAnnotations.PresetManager = class {
      */
     setCommonVisualProp(propertyName, propertyValue) {
         if (this.commonAnnotationVisuals[propertyName] === undefined) {
-            console.error("[setCommonVisualProp] property name not one of", this.presets.constructor.commonAnnotationVisuals, propertyName);
+            console.error("[setCommonVisualProp] property name not one of", this.constructor.commonAnnotationVisuals, propertyName);
             return false;
         }
         this._context.cache.set('visuals.' + propertyName, propertyValue);

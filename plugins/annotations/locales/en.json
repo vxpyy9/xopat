@@ -103,7 +103,8 @@
       "title": "Annotation list",
       "createLayer": "Create layer",
       "deleteSelection": "Delete selection",
-      "refresh": "Refresh list"
+      "refresh": "Refresh list",
+      "area": "Area"
     }
   },
   "common": {

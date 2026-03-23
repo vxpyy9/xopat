@@ -32,14 +32,14 @@ export class AppBar {
                 onClick: e => this.View._refreshVisualDropdown()
             }, {
                 id: "edit",
-                icon: undefined,
+                icon: "fa-bars",
                 title: $.t('main.bar.edit'),
                 body: [],
                 class: Dropdown,
                 extraClasses: { width: "min-w-max" },
                 onClick: e => this.Edit.refresh(true)
             }, {
-                id: "plugins", icon: "fa-bars", title: $.t('main.bar.plugins'),
+                id: "plugins", icon: "fa-puzzle-piece", title: $.t('main.bar.plugins'),
                 body: [], class: Dropdown
             }
         );

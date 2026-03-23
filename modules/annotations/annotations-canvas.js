@@ -263,11 +263,11 @@ OSDAnnotations.FabricWrapper = class extends XOpatViewerSingleton {
             //if no presets, maybe we are importing object array
             await this._loadObjects({objects: toImport}, clear, inheritSession);
         } else {
-            if (Array.isArray(toImport.presets) && toImport.presets.length > 0) {
+            if (Array.isArray(toImport?.presets) && toImport.presets.length > 0) {
                 imported = true;
                 await this.module.presets.import(toImport.presets, clear);
             }
-            if (Array.isArray(toImport.objects) && toImport.objects.length > 0) {
+            if (Array.isArray(toImport?.objects) && toImport.objects.length > 0) {
                 imported = true;
                 await this._loadObjects(toImport, clear, inheritSession);
             }
@@ -436,8 +436,18 @@ OSDAnnotations.FabricWrapper = class extends XOpatViewerSingleton {
      * @event active-layer-changed
      */
     setActiveLayer(layer) {
-        if (typeof layer === 'number') layer = this._layers[layer];
-        this._layer = this._layers[layer.id];
+        const nextLayer = (typeof layer === 'object' && layer)
+            ? layer
+            : (this._layers[String(layer)] ?? this._layers[layer]);
+
+        if (!nextLayer) return;
+
+        const previousLayer = this._layer;
+        if (previousLayer && previousLayer.id !== nextLayer.id) {
+            previousLayer.setActive(false);
+        }
+
+        this._layer = nextLayer;
         this._layer.setActive(true);
 
         this.raiseEvent('active-layer-changed', {
@@ -465,7 +475,10 @@ OSDAnnotations.FabricWrapper = class extends XOpatViewerSingleton {
      * @param {boolean} silent do not emit event
      */
     selectLayer(layer, silent=false) {
-        if (typeof layer === 'number') layer = this._layers[layer];
+        layer = (typeof layer === 'object' && layer)
+            ? layer
+            : (this._layers[String(layer)] ?? this._layers[layer]);
+
         if (!layer) return;
 
         if (!this._selectedLayers.has(layer.id)) {
@@ -482,7 +495,10 @@ OSDAnnotations.FabricWrapper = class extends XOpatViewerSingleton {
      * @param {boolean} silent do not emit event
      */
     deselectLayer(layer, silent=false) {
-        layer = typeof layer === 'number' ? this._layers[layer] : layer;
+        layer = (typeof layer === 'object' && layer)
+            ? layer
+            : (this._layers[String(layer)] ?? this._layers[layer]);
+
         if (!layer || !this._selectedLayers.has(layer.id)) return;
 
         this._selectedLayers.delete(layer.id);
@@ -490,8 +506,9 @@ OSDAnnotations.FabricWrapper = class extends XOpatViewerSingleton {
 
         if (this._layer && this._layer.id === layer.id) {
             const last = Array.from(this._selectedLayers).at(-1);
-            last ? this.setActiveLayer(Number(last)) : this.unsetActiveLayer();
+            last ? this.setActiveLayer(last) : this.unsetActiveLayer();
         }
+
         if (!silent) this._emitLayerSelectionChanged([], [layer]);
     }
 
@@ -501,12 +518,27 @@ OSDAnnotations.FabricWrapper = class extends XOpatViewerSingleton {
      */
     clearLayerSelection(silent=false) {
         const deselect = this.getSelectedLayers();
-        if (deselect.length === 0) return;
+        const hadActiveLayer = !!this._layer;
+
+        if (deselect.length === 0 && !hadActiveLayer) return;
 
         deselect.forEach(layer => layer.setActive(false));
         this._selectedLayers.clear();
 
-        if (!silent) this._emitLayerSelectionChanged([], deselect);
+        if (this._layer) {
+            this._layer.setActive(false);
+            this._layer = undefined;
+
+            if (!silent) {
+                this.raiseEvent('active-layer-changed', {
+                    layer: undefined
+                });
+            }
+        }
+
+        if (!silent && deselect.length) {
+            this._emitLayerSelectionChanged([], deselect);
+        }
     }
 
     /**
@@ -689,21 +721,31 @@ OSDAnnotations.FabricWrapper = class extends XOpatViewerSingleton {
      * @returns {void}
      */
     addAnnotationToLayer(annotation, index = undefined) {
+        const hasExplicitLayer =
+            annotation &&
+            annotation.layerID !== undefined &&
+            annotation.layerID !== null &&
+            String(annotation.layerID) !== '';
 
-        if (!annotation.hasOwnProperty("layerID")) {
-            let activeLayer = this.getActiveLayer();
-            if (!activeLayer){
+        if (!hasExplicitLayer) {
+            const activeLayer = this.getActiveLayer();
+            if (!activeLayer) {
                 annotation.layerID = undefined;
                 return;
             }
 
-            annotation.layerID = activeLayer.id;
+            annotation.layerID = String(activeLayer.id);
             activeLayer.addObject(annotation, index);
             return;
         }
 
-        let layer = this.getLayer(annotation.layerID);
-        if (!layer) return;
+        const layer = this.getLayer(String(annotation.layerID));
+        if (!layer) {
+            annotation.layerID = undefined;
+            return;
+        }
+
+        annotation.layerID = String(layer.id);
         layer.addObject(annotation, index);
     }
 
@@ -943,6 +985,7 @@ OSDAnnotations.FabricWrapper = class extends XOpatViewerSingleton {
         annotation.created = annotation.created || Date.now();
         annotation.id = annotation.id || crypto.randomUUID();
         annotation.internalID = annotation.internalID || this.module._generateInternalId();
+        this.module.assignAnnotationIds(annotation);
 
         const layerIndex = annotation.hasOwnProperty("_position") && annotation.layerID ? annotation._position : undefined;
         const boardIndex = annotation.hasOwnProperty("_position") && !annotation.layerID ? annotation._position : undefined;
@@ -969,11 +1012,24 @@ OSDAnnotations.FabricWrapper = class extends XOpatViewerSingleton {
 
     _replaceAnnotation(previous, next, updateUI) {
         let boardIndex = undefined;
-        if (previous.layerID) {
-            const layerIndex = this.getLayer(previous.layerID).getAnnotationIndex(previous);
+
+        const hadLayer =
+            previous &&
+            previous.hasOwnProperty('layerID') &&
+            previous.layerID !== undefined &&
+            previous.layerID !== null &&
+            String(previous.layerID) !== '';
+
+        if (hadLayer) {
+            const layerId = String(previous.layerID);
+            const layer = this.getLayer(layerId);
+            const layerIndex = layer?.getAnnotationIndex(previous);
+
             this.removeAnnotationFromLayer(previous);
+            next.layerID = layerId;
             this.addAnnotationToLayer(next, layerIndex);
         } else {
+            next.layerID = undefined;
             boardIndex = this.getBoardItemIndex('annotation', previous.incrementId);
         }
 
@@ -986,7 +1042,7 @@ OSDAnnotations.FabricWrapper = class extends XOpatViewerSingleton {
             }
 
             this.selectAnnotation(next, true, true);
-            this.raiseEvent('annotation-replace', {previous, next, boardIndex});
+            this.raiseEvent('annotation-replace', { previous, next, boardIndex });
         }
 
         this.canvas.requestRenderAll();
@@ -1090,7 +1146,7 @@ OSDAnnotations.FabricWrapper = class extends XOpatViewerSingleton {
     changeAnnotationPreset(annotation, presetID, _raise=true) {
         let cancelFlag = false;
         try {
-            if (annotation) this.module.raiseEvent('annotation-before-preset-change', {
+            if (annotation) this.raiseEvent('annotation-before-preset-change', {
                 object: annotation,
                 isCancelled: () => cancelFlag,
                 setCancelled: (cancelled) => {cancelFlag = cancelled},
@@ -1104,7 +1160,7 @@ OSDAnnotations.FabricWrapper = class extends XOpatViewerSingleton {
             const options = this.module.presets.getAnnotationOptionsFromInstance(this.module.presets.get(presetID));
             factory.configure(annotation, options);
             this.canvas.requestRenderAll();
-            if (_raise) this.module.raiseEvent('annotation-preset-change', {object: annotation, presetID: presetID, oldPresetID: oldPresetID});
+            if (_raise) this.raiseEvent('annotation-preset-change', {object: annotation, presetID: presetID, oldPresetID: oldPresetID});
             return true;
         }
         return false;
@@ -1691,7 +1747,7 @@ OSDAnnotations.FabricWrapper = class extends XOpatViewerSingleton {
             if (!_this.module.cursor.isDown) {
                 //todo in auto mode, this event is fired twice!! fix
                 if (_this.module.cursor.mouseTime === Infinity) {
-                    _this.module.raiseEvent('nonprimary-release-not-handled', {
+                    _this.raiseEvent('nonprimary-release-not-handled', {
                         originalEvent: event,
                         pressTime: _this.module.cursor.abortedTime
                     });
@@ -1706,7 +1762,7 @@ OSDAnnotations.FabricWrapper = class extends XOpatViewerSingleton {
                 event.preventDefault();
             } else {
                 //todo better system by e.g. unifying the events, allowing cancellability and providing only interface to modes
-                _this.module.raiseEvent('nonprimary-release-not-handled', {
+                _this.raiseEvent('nonprimary-release-not-handled', {
                     originalEvent: event,
                     pressTime: _this.module.cursor.mouseTime === Infinity ? _this.module.cursor.abortedTime : _this.module.cursor.mouseTime
                 });
@@ -1733,7 +1789,7 @@ OSDAnnotations.FabricWrapper = class extends XOpatViewerSingleton {
             if (!_this.module.cursor.isDown) {
                 //todo in auto mode, this event is fired twice!! fix
                 if (_this.module.cursor.mouseTime === Infinity) {
-                    _this.module.raiseEvent('canvas-release', {
+                    _this.raiseEvent('canvas-release', {
                         originalEvent: event,
                         pressTime: _this.module.cursor.abortedTime
                     });
@@ -1753,7 +1809,7 @@ OSDAnnotations.FabricWrapper = class extends XOpatViewerSingleton {
                 }
 
                 //todo better system by e.g. unifying the events, allowing cancellability and providing only interface to modes
-                _this.module.raiseEvent('canvas-release', {
+                _this.raiseEvent('canvas-release', {
                     originalEvent: event,
                     pressTime: _this.module.cursor.mouseTime === Infinity ? _this.module.cursor.abortedTime : _this.module.cursor.mouseTime
                 });
@@ -2046,10 +2102,8 @@ OSDAnnotations.FabricWrapper = class extends XOpatViewerSingleton {
     }
 
     _loadObjects(input, clear, inheritSession = false) {
-        //from loadFromJSON implementation in fabricJS
         const _this = this.canvas, self = this;
 
-        // If we get already fabric.js objects, avoid passing them to enlivenObjects
         const fabricObjects = [];
         const nonFabricObjects = [];
         for (let obj of input.objects) {
@@ -2073,21 +2127,39 @@ OSDAnnotations.FabricWrapper = class extends XOpatViewerSingleton {
                 this._layers = {};
                 this._layer = undefined;
                 this.clearAnnotationSelection(true);
-                this.clearLayerSelection();
-                this.unsetActiveLayer();
+                this.clearLayerSelection(true);
             }
+
             let insertion = 0;
+            const touchedLayers = new Set();
 
             function initObject(obj) {
                 if (inheritSession && !obj.sessionID) {
                     obj.sessionID = self.module.session;
                 }
-                self.checkLayer(obj);
 
+                self.checkLayer(obj);
                 self.module.checkAnnotation(obj, zoom, graphicZoom);
                 _this.insertAt(obj, insertion++);
-                if (!obj.layerID) {
-                    self.upsertBoardItem('annotation', obj.incrementId);
+
+                const hasLayer =
+                    obj.hasOwnProperty('layerID') &&
+                    obj.layerID !== undefined &&
+                    obj.layerID !== null &&
+                    String(obj.layerID) !== '';
+
+                if (hasLayer) {
+                    const layerId = String(obj.layerID);
+                    obj.layerID = layerId;
+
+                    const layerIndex = obj.hasOwnProperty('_position') ? obj._position : undefined;
+                    self.addAnnotationToLayer(obj, layerIndex);
+                    touchedLayers.add(layerId);
+                } else {
+                    obj.layerID = undefined;
+
+                    const boardIndex = obj.hasOwnProperty('_position') ? obj._position : undefined;
+                    self.upsertBoardItem('annotation', obj.incrementId, boardIndex);
                 }
             }
 
@@ -2095,11 +2167,16 @@ OSDAnnotations.FabricWrapper = class extends XOpatViewerSingleton {
                 initObject(obj);
             }
 
-            // Process also enlivenObjects - avoided items
             for (let obj of fabricObjects) {
                 initObject(obj);
             }
+
             self.module.assignAnnotationIds(_this.getObjects());
+
+            touchedLayers.forEach(layerId => {
+                self.raiseEvent('layer-objects-changed', { layerId: String(layerId) });
+            });
+
             self.raiseEvent('annotation-board-refresh-request', {
                 viewer: self.viewer,
                 clear,

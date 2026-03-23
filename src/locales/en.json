@@ -98,7 +98,7 @@
         "explainExportUrl": "Get the link without data",
         "exportFile": "Export",
         "explainExportFile": "Download together with plugins data",
-        "plugins": "Get plugins",
+        "plugins": "Plugins",
         "explainPlugins": "Add plugins to the visualization",
         "tutorials": "Tutorials",
         "explainTutorials": "Show tutorials",

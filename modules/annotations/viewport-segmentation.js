@@ -145,6 +145,8 @@ OSDAnnotations.ViewportSegmentation = class extends OSDAnnotations.AnnotationSta
 
         const shaders = this.context.viewer.drawer.renderer.getAllShaders();
         const result = {};
+        // Todo maybe delete this if, for now we just use the entire shader list, meaning we process the WHOLE viz stack, supporting single
+        //  layer is tricky, as blending modes are in play (so it might not accuarelly select what is user seeing)
         if (shaders[this._selectedShader]) {
             result[this._selectedShader] = shaders[this._selectedShader].getConfig();
         } else {

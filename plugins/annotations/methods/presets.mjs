@@ -48,8 +48,10 @@ export const presetMethods = {
         if (!pushed) html.push(`To start annotating, please <a onclick="${this.THIS}.showPresets();">create some class presets</a>.`);
         html.push('</div>');
         $('#preset-list-inner-mp').html(html.join(''));
-        if (this._fireBoardUpdate) this.context.historyManager.refresh();
-        this._fireBoardUpdate = true;
+
+        // todo bad usage!
+        // if (this._fireBoardUpdate) this.context.historyManager.refresh();
+        // this._fireBoardUpdate = true;
     },
 
     getMissingPresetHTML(isLeftClick) {

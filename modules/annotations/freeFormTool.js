@@ -61,7 +61,7 @@ OSDAnnotations.FreeFormTool = class {
 
         if (objectFactory !== undefined) {
             if (objectFactory.factoryID !== "polygon" && objectFactory.factoryID !== "multipolygon") {  //object can be used immedietaly
-                let points = Array.isArray(created) ? points : (
+                let points = Array.isArray(created) ? created : (
                     objectFactory.supportsBrush() ?
                         objectFactory.toPointArray(object,
                             OSDAnnotations.AnnotationObjectFactory.withObjectPoint, 1) : undefined
