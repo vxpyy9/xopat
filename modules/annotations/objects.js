@@ -327,70 +327,79 @@ OSDAnnotations.AnnotationObjectFactory = class {
         const control = new fabric.Control({
             x: 0.5,
             y: -0.5,
-            offsetX: 25,
-            offsetY: 20,
+            offsetX: 22,
+            offsetY: -16,
             cursorStyle: 'pointer',
-            sizeX: 40,
-            sizeY: 40,
+            sizeX: 34,
+            sizeY: 34,
             touchSizeX: 40,
             touchSizeY: 40,
             enabled: true,
             render: (ctx, left, top, styleOverride, fabricObject) => {
-                const icon = typeof iconRenderer === 'string' ? iconRenderer : iconRenderer(fabricObject);
-                const value = valueRenderer ? (
-                    typeof valueRenderer === 'string' ? valueRenderer : valueRenderer(fabricObject)
-                ) : null;
-                const showValue = value !== null && value !== undefined && value !== '';
+                const rawIcon = typeof iconRenderer === 'string' ? iconRenderer : iconRenderer(fabricObject);
+                const icon = this._resolveControlGlyph(rawIcon);
 
-                const iconSize = 36;
+                const rawValue = valueRenderer
+                    ? (typeof valueRenderer === 'string' ? valueRenderer : valueRenderer(fabricObject))
+                    : null;
+
+                const showValue = rawValue !== null && rawValue !== undefined && rawValue !== '' && Number(rawValue) > 0;
+                const value = showValue ? String(rawValue) : '';
+
+                const iconSize = 18;
                 const padding = 8;
-
-                let totalWidth = iconSize;
                 let textWidth = 0;
 
                 if (showValue) {
-                    ctx.font = `${iconSize * 0.4}px Arial`;
+                    ctx.font = `600 11px Arial`;
                     textWidth = ctx.measureText(value).width;
-                    totalWidth = iconSize + padding + textWidth + padding;
                 }
 
-                const height = iconSize;
-                const radius = height / 2;
+                const bubbleHeight = 24;
+                const bubbleWidth = showValue
+                    ? (iconSize + padding * 2 + 8 + textWidth)
+                    : (iconSize + padding * 2);
 
-                const leftAlignedX = left + (totalWidth / 2) - (iconSize / 2);
+                const radius = bubbleHeight / 2;
 
                 ctx.save();
-                ctx.translate(leftAlignedX, top);
-                ctx.rotate(fabric.util.degreesToRadians(fabricObject.angle));
+                ctx.translate(left, top);
+                ctx.rotate(fabric.util.degreesToRadians(fabricObject.angle || 0));
 
-                const halfWidth = totalWidth / 2;
+                const x = -bubbleWidth / 2;
+                const y = -bubbleHeight / 2;
 
                 ctx.beginPath();
-                ctx.arc(-halfWidth + radius, 0, radius, Math.PI / 2, 3 * Math.PI / 2);
-                ctx.arc(halfWidth - radius, 0, radius, 3 * Math.PI / 2, Math.PI / 2);
+                ctx.moveTo(x + radius, y);
+                ctx.lineTo(x + bubbleWidth - radius, y);
+                ctx.arcTo(x + bubbleWidth, y, x + bubbleWidth, y + radius, radius);
+                ctx.lineTo(x + bubbleWidth, y + bubbleHeight - radius);
+                ctx.arcTo(x + bubbleWidth, y + bubbleHeight, x + bubbleWidth - radius, y + bubbleHeight, radius);
+                ctx.lineTo(x + radius, y + bubbleHeight);
+                ctx.arcTo(x, y + bubbleHeight, x, y + bubbleHeight - radius, radius);
+                ctx.lineTo(x, y + radius);
+                ctx.arcTo(x, y, x + radius, y, radius);
                 ctx.closePath();
 
                 ctx.fillStyle = 'white';
                 ctx.fill();
-
                 ctx.strokeStyle = 'black';
                 ctx.lineWidth = 1;
                 ctx.stroke();
 
-                const iconX = -halfWidth + iconSize / 2;
-                ctx.font = `${iconSize * 0.8}px Font Awesome 5 Free`;
+                const iconCenterX = x + padding + iconSize / 2;
+
+                ctx.font = `900 ${iconSize}px "Font Awesome 5 Free"`;
                 ctx.textAlign = 'center';
                 ctx.textBaseline = 'middle';
                 ctx.fillStyle = 'black';
-                ctx.fillText(icon, iconX, 3);
+                ctx.fillText(icon, iconCenterX, 1);
 
                 if (showValue) {
-                    const textX = iconX + iconSize / 2 + padding + textWidth / 2;
-                    ctx.font = `${iconSize * 0.5}px Segoe UI`;
-                    ctx.textAlign = 'center';
+                    ctx.font = `600 11px Arial`;
+                    ctx.textAlign = 'left';
                     ctx.textBaseline = 'middle';
-                    ctx.fillStyle = 'black';
-                    ctx.fillText(value, textX, 1);
+                    ctx.fillText(value, x + padding + iconSize + 8, 1);
                 }
 
                 ctx.restore();
@@ -416,45 +425,74 @@ OSDAnnotations.AnnotationObjectFactory = class {
                 if (isVisible) visibleBefore++;
             }
 
-            const spacing = 45;
-            const baseOffsetY = 20;
-            const dynamicOffsetY = baseOffsetY + spacing * visibleBefore;
+            const spacing = 30;
+            const baseOffsetY = -16;
+            const dynamicOffsetY = baseOffsetY - spacing * visibleBefore;
 
-            const pt = { x: control.x * dim.x + control.offsetX, y: control.y * dim.y + dynamicOffsetY };
+            const pt = {
+                x: control.x * dim.x + control.offsetX,
+                y: control.y * dim.y + dynamicOffsetY
+            };
             return fabric.util.transformPoint(pt, finalMatrix);
         };
 
         if (onClick) {
             control.mouseUpHandler = function(eventData, transform, x, y) {
+                eventData?.preventDefault?.();
+                eventData?.stopPropagation?.();
+
+                const wrapper = transform?.target?._factory?.()?._context?.fabric;
+                if (wrapper) {
+                    wrapper._controlInteractionActive = false;
+                    wrapper.module.cursor.isDown = false;
+                    wrapper.module.cursor.mouseTime = Infinity;
+                }
+
                 onClick(eventData, transform, x, y);
                 return true;
             };
         }
 
         return control;
-
     }
 
-    // TODO: incomming PR commened this code block - test if valid!
+    _resolveControlGlyph(icon) {
+        const map = {
+            'fa-eye': '\uf06e',
+            'fa-eye-slash': '\uf070',
+            'fa-lock': '\uf023',
+            'fa-comments': '\uf086',
+        };
+        return map[icon] || icon || '?';
+    }
+
     renderAllControls(ofObject) {
         const controls = {};
 
         controls.private = this.renderIcon(
-            (obj) => obj.private ? 'fa-lock' : 'fa-eye',
+            (obj) => obj.private ? 'fa-eye-slash' : 'fa-eye',
             undefined,
-            undefined,
+            (eventData, transform) => {
+                const target = transform?.target;
+                if (!target) return;
+                const fabric = this._context.fabric;
+                fabric.setAnnotationPrivate(target, !target.private);
+            },
         );
+
         const commentsControl = this.renderIcon(
             'fa-comments',
             (obj) => obj.comments?.filter(c => !c.removed).length ?? 0,
             () => {
-                this._context.raiseEvent('comments-control-clicked')
+                this._context.raiseEvent('comments-control-clicked');
             },
         );
         commentsControl.getVisibility = () => !!this._context.getCommentsEnabled();
         controls.comments = commentsControl;
 
         ofObject.controls = controls;
+        ofObject.hasControls = true;
+        ofObject.hasBorders = false;
     }
 
     __copyProps(ofObject, toObject, defaultProps, additionalProps) {
@@ -731,8 +769,8 @@ OSDAnnotations.AnnotationObjectFactory = class {
                 strokeDashArray: newStrokeDashArray,
                 strokeLineCap: 'round',
                 strokeUniform: true,
-                left: clonedObj.left + clonedObj.width / 2,
-                top: clonedObj.top + clonedObj.height / 2,
+                left: clonedObj.left + clonedObj.width / 2 + theObject.strokeWidth / 2,
+                top: clonedObj.top + clonedObj.height / 2 + theObject.strokeWidth / 2,
                 originX: 'center',
                 originY: 'center',
                 selectable: false,

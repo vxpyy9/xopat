@@ -1689,16 +1689,25 @@ export function initXOpat(PLUGINS: Record<string, XOpatElementItem>, MODULES: Re
             APPLICATION_CONTEXT.setOption("bypassCacheLoadTime", false);
         });
         return true;
-    }
+    };
 
     function checkLocalState() {
-        const data = sessionStorage.getItem('__xopat_session__');
-        sessionStorage.removeItem('__xopat_session__');
+        const sessionStateKey = '__xopat_session__';
+
+        // Explicit session data in the URL should always win over any tab-local snapshot.
+        // When this happens, drop the cached snapshot so it does not override intentional links.
+        if (window.location.hash && window.location.hash.length > 1) {
+            sessionStorage.removeItem(sessionStateKey);
+            return null;
+        }
+
+        const data = sessionStorage.getItem(sessionStateKey);
         if (data) {
             try {
                 return JSON.parse(data);
             } catch (e) {
                 console.debug("Failed to restore session!", e);
+                sessionStorage.removeItem(sessionStateKey);
             }
         }
         return null;

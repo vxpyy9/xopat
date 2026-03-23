@@ -99,7 +99,7 @@ OSDAnnotations.Ruler = class extends OSDAnnotations.AnnotationObjectFactory {
             scaleY: text.scaleY,
             scaleX: text.scaleX,
             selectable: false,
-            hasControls: false,
+            hasControls: text.hasControls,
             stroke: text.stroke,
             fill: text.fill,
             paintFirst: text.paintFirst,
@@ -454,7 +454,7 @@ OSDAnnotations.Ruler = class extends OSDAnnotations.AnnotationObjectFactory {
             type: this.type,
             presetID: options.presetID,
             measure: text.text,
-            hasControls: false,
+            hasControls: true,
             hasBorders: false,
         });
     }

@@ -34,6 +34,7 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 		this.session = this.version + "_" + Date.now();
 
         this._activeViewer = VIEWER;
+        this.commentsEnabled = true;
 		this._init();
 		this.user = XOpatUser.instance();
 	}

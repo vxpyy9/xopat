@@ -84,76 +84,38 @@ export const handlerMethods = {
         this.annotationsEnabledEditModeHandler = this.annotationsEnabledEditModeHandler.bind(this);
         this.context.addHandler('enabled-edit-mode', this.annotationsEnabledEditModeHandler);
         this.context.addHandler('preset-select', () => this._refreshAllPresetLists?.());
+
+        this.context.addHandler('preset-create', () => {
+            this.updatePresetEvent?.();
+            this._refreshAllPresetLists?.();
+        });
+
         this.context.addHandler('preset-update', () => {
             this.updatePresetEvent?.();
             this._refreshAllPresetLists?.();
         });
+
         this.context.addHandler('preset-delete', () => {
             this.context.createPresetsCookieSnapshot();
+            this.updatePresetEvent?.();
+            this._refreshAllPresetLists?.();
+        });
+
+        this.context.addHandler('preset-meta-add', () => {
+            this.context.createPresetsCookieSnapshot();
+            this.updatePresetEvent?.();
+            this._refreshAllPresetLists?.();
+        });
+
+        this.context.addHandler('preset-meta-remove', () => {
+            this.context.createPresetsCookieSnapshot();
+            this.updatePresetEvent?.();
             this._refreshAllPresetLists?.();
         });
 
         this.context.addFabricHandler('annotation-set-private', () => {
             this.context.fabric.rerender();
             this._refreshAllBoardPanels?.();
-        });
-
-        this.context.addHandler('nonprimary-release-not-handled', (e) => {
-            if (this.context.presets.right || (Date.now() - e.pressTime) > 250) return;
-
-            let actions = [];
-            let handler;
-            const active = this.context.fabric.canvas.findTarget(e.originalEvent);
-            if (active) {
-                this.context.fabric.canvas.setActiveObject(active);
-                this.context.fabric.canvas.renderAll();
-                actions.push({ title: 'Change annotation to:' });
-                handler = this._clickAnnotationChangePreset.bind(this, active);
-            } else {
-                actions.push({ title: 'Select preset for left click:' });
-                handler = this._clickPresetSelect.bind(this, true);
-            }
-
-            this.context.presets.foreach((preset) => {
-                const category = preset.getMetaValue('category') || 'unknown';
-                const icon = preset.objectFactory.getIcon();
-                const containerCss = this.isUnpreferredPreset(preset.presetID) && 'opacity-50';
-                actions.push({
-                    icon,
-                    iconCss: `color: ${preset.color};`,
-                    containerCss,
-                    title: category,
-                    action: () => {
-                        this._presetSelection = preset.presetID;
-                        handler();
-                    }
-                });
-            });
-
-            if (active) {
-                const props = this._getAnnotationProps(active);
-                const handlerMarkPrivate = this._clickAnnotationMarkPrivate.bind(this, active);
-                actions.push({ title: 'Modify annotation:' });
-                actions.push({
-                    title: props.private ? 'Unmark as private' : 'Mark as private',
-                    icon: props.private ? 'visibility' : 'visibility_lock',
-                    action: () => handlerMarkPrivate()
-                });
-            }
-
-            actions.push({ title: 'Actions:' });
-            const mousePos = this._getMousePosition(e);
-            const handlerCopy = this._copyAnnotation.bind(this, mousePos, active);
-            actions.push({ title: 'Copy', icon: 'fa-copy', containerCss: !active && 'opacity-50', action: () => active && handlerCopy() });
-            const handlerCut = this._cutAnnotation.bind(this, mousePos, active);
-            actions.push({ title: 'Cut', icon: 'fa-scissors', containerCss: !active && 'opacity-50', action: () => active && handlerCut() });
-            const canPaste = this._canPasteAnnotation(e);
-            const handlerPaste = this._pasteAnnotation.bind(this, e);
-            actions.push({ title: 'Paste', icon: 'fa-paste', containerCss: !canPaste && 'opacity-50', action: () => canPaste && handlerPaste() });
-            const handlerDelete = this._deleteAnnotation.bind(this, active);
-            actions.push({ title: 'Delete', icon: 'fa-trash', containerCss: !active && 'opacity-50', action: () => active && handlerDelete() });
-
-            USER_INTERFACE.DropDown.open(e.originalEvent, actions);
         });
 
         this.context.Modes.FREE_FORM_TOOL_ADD.customHtml =

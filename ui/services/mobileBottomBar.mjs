@@ -173,12 +173,21 @@ export class MobileBottomBar {
     onLayoutChange(details) {
         const width = details?.width ?? window.innerWidth;
         if (!this.context) return;
-        this.context.style.height = width < this._breakpoint ? "auto" : "0px";
-        this.context.style.overflow = width < this._breakpoint ? "visible" : "hidden";
-        if (width >= this._breakpoint) {
+
+
+        const isMobile = this._isMobileWidth(width);
+        if (isMobile) {
+            this.context.style.height = "auto";
+            this.context.style.overflow =  "visible" ;
+            this._setToolbarsVisible(this._activePanel === "globalMenu");
+        } else {
+            this.context.style.height = "0px";
+            this.context.style.overflow = "hidden";
             this._closeViewerPicker();
             this._setActivePanel(null);
+            this._setToolbarsVisible(true);
         }
+
         this.sync();
     }
 
@@ -356,6 +365,23 @@ export class MobileBottomBar {
         });
     }
 
+    _isMobileWidth(width = window.innerWidth) {
+        return width < this._breakpoint;
+    }
+
+    _getToolbarsContainer() {
+        return document.getElementById("toolbars-container");
+    }
+
+    _setToolbarsVisible(visible) {
+        const toolbars = this._getToolbarsContainer();
+        if (!toolbars) return;
+
+        toolbars.style.display = visible ? "" : "none";
+        toolbars.style.visibility = visible ? "visible" : "hidden";
+        toolbars.style.pointerEvents = visible ? "auto" : "none";
+    }
+
     _hideViewerMenu(menu) {
         if (!menu) return;
         if (menu.context) {
@@ -373,6 +399,7 @@ export class MobileBottomBar {
     _hideGlobalMenu() {
         const toolbars = document.getElementById("toolbars-container");
         if (toolbars) toolbars.style.display = "none";
+        this._setToolbarsVisible(!this._isMobileWidth());
         if (window.LAYOUT?.isOpened?.()) {
             window.LAYOUT.toggle?.();
         }
@@ -398,10 +425,7 @@ export class MobileBottomBar {
         this._closeViewerPicker();
         this._hideViewerMenus();
 
-        const toolbars = document.getElementById("toolbars-container");
-        if (toolbars) {
-            toolbars.style.display = "";
-        }
+        this._setToolbarsVisible(true);
 
         window.LAYOUT?.closeFullscreen?.();
         window.LAYOUT?.toggle?.();

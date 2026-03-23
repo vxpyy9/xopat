@@ -28,6 +28,7 @@ export class Modal extends BaseComponent {
         const box = div(
             {
                 class: "modal-box relative",
+                style: this.width ? `width: ${this.width};` : 'max-width: 35rem;',
             },
             this.allowClose
                 ? div(
@@ -99,12 +100,16 @@ export class Modal extends BaseComponent {
 
         resizeHandle.addEventListener("mousedown", (e) => {
             e.preventDefault();
+            const modal = this.root?.querySelector(".modal-box");
+            if (!modal) return;
 
             const rect = box.getBoundingClientRect();
             this._startWidth = rect.width;
             this._startHeight = rect.height;
             this._lastX = e.clientX;
             this._lastY = e.clientY;
+            modal.style.width = rect.width;
+            modal.style.maxWidth = "none";
 
             document.body.style.cursor = "se-resize";
             document.addEventListener("mousemove", this._mouseMoving);

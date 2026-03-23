@@ -1,7 +1,7 @@
 import { createCommentsWindow, finalizeCommentsWindowMount } from '../comments/commentsWindow.mjs';
 import { AnnotationBoardPanel } from '../board/annotationBoardPanel.mjs';
 
-const { div, button, input, span } = globalThis.van.tags;
+const { div, button, input, span, h3 } = globalThis.van.tags;
 
 function iconButton(icon, title, onClick, active = false) {
     return button({
@@ -61,8 +61,10 @@ export const viewerMenuMethods = {
         USER_INTERFACE.addHtml(createCommentsWindow(this), this.id);
         finalizeCommentsWindowMount(this);
 
-        this.context.addHandler('annotation-selected', (e) => this._annotationSelected(e.object));
-        this.context.addHandler('annotation-deselected', (e) => this._annotationDeselected(e.object));
+        this.context.addHandler('enabled', () => {
+            this._updateViewerControls();
+            this._refreshAllBoardPanels();
+        });
 
         this.context.addHandler('annotation-board-save-request', (e) => {
             const viewerId = e?.viewer ? this._resolveViewerId(e.viewer) : undefined;
@@ -164,7 +166,7 @@ export const viewerMenuMethods = {
                     span({ class: 'fa-auto fa-pen-to-square mr-1 text-xs' }),
                     this.t('annotations.viewerMenu.editPresets')
                 ),
-                div({ class: 'pt-7' }, state.presetInner)
+                div({ class: 'pt-4' }, state.presetInner)
             );
 
             state.annotationList = div({ class: `mx-2 mt-2 flex-1 min-h-0 ${state.currentTab === 'annot' ? '' : 'hidden'}`.trim() },
@@ -177,18 +179,26 @@ export const viewerMenuMethods = {
             const body = div({ class: 'flex flex-col w-full h-full' },
                 div({ class: 'flex flex-row items-center justify-between w-full mb-2 px-1' },
                     state.enableButton,
+                    h3({ class: 'text-lg font-bold' }, this.t('annotations.viewerMenu.title')),
                     state.outlineButton,
                     state.edgeButton,
                     state.saveButton,
                     state.moreButton
                 ),
-                div({ class: 'flex flex-row w-full gap-2 mb-2' },
-                    div({ class: 'flex-1' },
-                        div({ class: 'text-xs mb-1 opacity-70' }, this.t('annotations.viewerMenu.border')),
+                div({ class: 'grid grid-cols-2 gap-4 mb-4 px-2' },
+                    div({ class: 'flex flex-col gap-1' },
+                        div({ class: 'flex justify-between items-center px-1' },
+                            span({ class: 'text-[10px] uppercase font-bold opacity-50' }, this.t('annotations.viewerMenu.border')),
+                            // Optional: Dynamic value display
+                            span({ class: 'text-[10px] font-mono' }, state.borderInput.value)
+                        ),
                         state.borderInput
                     ),
-                    div({ class: 'flex-1' },
-                        div({ class: 'text-xs mb-1 opacity-70' }, this.t('annotations.viewerMenu.opacity')),
+                    div({ class: 'flex flex-col gap-1' },
+                        div({ class: 'flex justify-between items-center px-1' },
+                            span({ class: 'text-[10px] uppercase font-bold opacity-50' }, this.t('annotations.viewerMenu.opacity')),
+                            span({ class: 'text-[10px] font-mono' }, Math.round(state.opacityInput.value * 100) + '%')
+                        ),
                         state.opacityInput
                     )
                 ),
@@ -385,7 +395,6 @@ ${UIComponents.Elements.checkBox({ label: this.t('annotations.comments.autoOpen'
             })}
 </div>`);
 
-        this.annotationsMenuBuilder = new UIComponents.Containers.RowPanel('available-annotations');
         this.updateSelectedFormat(this.exportOptions.format);
         this.updatePresetsHTML();
 
@@ -405,25 +414,119 @@ ${UIComponents.Elements.checkBox({ label: this.t('annotations.comments.autoOpen'
 
         this._unbindViewerFabricEvents(viewerId);
 
-        const boardRefresh = () => {
-            this._getViewerUI(viewerId)?.boardPanel?.requestRender();
+        const annotationSelectionChanged = (e) => {
+            const selected = Array.isArray(e?.selected) ? e.selected : (e?.selected ? [e.selected] : []);
+            const deselected = Array.isArray(e?.deselected) ? e.deselected : (e?.deselected ? [e.deselected] : []);
+
+            const lastSelected = selected.length ? selected[selected.length - 1] : null;
+
+            if (lastSelected) {
+                this._annotationSelected(lastSelected);
+            } else if (deselected.length) {
+                this._annotationDeselected(deselected[deselected.length - 1]);
+            }
+
+            const panel = this._getViewerUI(viewerId)?.boardPanel;
+            if (panel?.root) {
+                panel._updateSelectionVisuals?.(selected, deselected, 'annotation');
+                panel._updateDeleteSelectionHeaderButton?.();
+            }
         };
 
+
+        const layerSelectionChanged = (e) => {
+            const panel = this._getViewerUI(viewerId)?.boardPanel;
+            if (!panel?.root) return;
+            panel._updateSelectionVisuals?.(e?.selected, e?.deselected, 'layer');
+            panel._updateDeleteSelectionHeaderButton?.();
+        };
+
+        const activeLayerChanged = (e) => {
+            const panel = this._getViewerUI(viewerId)?.boardPanel;
+            if (!panel?.root) return;
+            panel._updateActiveLayerVisual?.(e?.layer);
+            panel._updateDeleteSelectionHeaderButton?.();
+        };
+
+        // TODO: this is too costly, we should update items incrementally, not rerender everything
         const sideRefresh = () => {
             this._getViewerUI(viewerId)?.boardPanel?.requestRender();
             this._refreshAllPresetLists();
             this._refreshAllAuthorLists();
         };
 
-        state._fabricEventBindings = {
-            fabric,
-            boardRefresh,
-            sideRefresh
+        const dropDown = (e) => {
+            if (this.context.presets.right || (Date.now() - e.pressTime) > 250) return;
+
+            let actions = [];
+            let handler;
+            const active = this.context.fabric.canvas.findTarget(e.originalEvent);
+            if (active) {
+                this.context.fabric.canvas.setActiveObject(active);
+                this.context.fabric.canvas.renderAll();
+                actions.push({ title: 'Change annotation to:' });
+                handler = this._clickAnnotationChangePreset.bind(this, active);
+            } else {
+                actions.push({ title: 'Select preset for left click:' });
+                handler = this._clickPresetSelect.bind(this, true);
+            }
+
+            this.context.presets.foreach((preset) => {
+                const category = preset.getMetaValue('category') || 'unknown';
+                const icon = preset.objectFactory.getIcon();
+                const containerCss = this.isUnpreferredPreset(preset.presetID) && 'opacity-50';
+                actions.push({
+                    icon,
+                    iconCss: `color: ${preset.color};`,
+                    containerCss,
+                    title: category,
+                    action: () => {
+                        this._presetSelection = preset.presetID;
+                        handler();
+                    }
+                });
+            });
+
+            if (active) {
+                const props = this._getAnnotationProps(active);
+                const handlerMarkPrivate = this._clickAnnotationMarkPrivate.bind(this, active);
+                actions.push({ title: 'Modify annotation:' });
+                actions.push({
+                    title: props.private ? 'Unmark as private' : 'Mark as private',
+                    icon: props.private ? 'visibility' : 'visibility_lock',
+                    action: () => handlerMarkPrivate()
+                });
+            }
+
+            actions.push({ title: 'Actions:' });
+            const mousePos = this._getMousePosition(e);
+            const handlerCopy = this._copyAnnotation.bind(this, mousePos, active);
+            actions.push({ title: 'Copy', icon: 'fa-copy', containerCss: !active && 'opacity-50', action: () => active && handlerCopy() });
+            const handlerCut = this._cutAnnotation.bind(this, mousePos, active);
+            actions.push({ title: 'Cut', icon: 'fa-scissors', containerCss: !active && 'opacity-50', action: () => active && handlerCut() });
+            const canPaste = this._canPasteAnnotation(e);
+            const handlerPaste = this._pasteAnnotation.bind(this, e);
+            actions.push({ title: 'Paste', icon: 'fa-paste', containerCss: !canPaste && 'opacity-50', action: () => canPaste && handlerPaste() });
+            const handlerDelete = this._deleteAnnotation.bind(this, active);
+            actions.push({ title: 'Delete', icon: 'fa-trash', containerCss: !active && 'opacity-50', action: () => active && handlerDelete() });
+
+            USER_INTERFACE.DropDown.open(e.originalEvent, actions);
         };
 
-        fabric.addHandler('layer-selection-changed', boardRefresh);
-        fabric.addHandler('active-layer-changed', boardRefresh);
-        fabric.addHandler('annotation-selection-changed', boardRefresh);
+        state._fabricEventBindings = {
+            fabric,
+            annotationSelectionChanged,
+            layerSelectionChanged,
+            activeLayerChanged,
+            sideRefresh,
+            dropDown
+        };
+
+        fabric.addHandler('annotation-selection-changed', annotationSelectionChanged);
+        fabric.addHandler('layer-selection-changed', layerSelectionChanged);
+        fabric.addHandler('active-layer-changed', activeLayerChanged);
+
+        fabric.addHandler('layer-visibility-changed', sideRefresh);
 
         fabric.addHandler('layer-objects-changed', sideRefresh);
         fabric.addHandler('annotation-create', sideRefresh);
@@ -431,6 +534,8 @@ ${UIComponents.Elements.checkBox({ label: this.t('annotations.comments.autoOpen'
         fabric.addHandler('annotation-replace', sideRefresh);
         fabric.addHandler('layer-added', sideRefresh);
         fabric.addHandler('layer-removed', sideRefresh);
+
+        fabric.addHandler('nonprimary-release-not-handled', dropDown);
     },
 
     _unbindViewerFabricEvents(viewerOrId) {
@@ -441,18 +546,27 @@ ${UIComponents.Elements.checkBox({ label: this.t('annotations.comments.autoOpen'
         const bindings = state?._fabricEventBindings;
         if (!bindings?.fabric) return;
 
-        const { fabric, boardRefresh, sideRefresh } = bindings;
+        const {
+            fabric,
+            annotationSelectionChanged,
+            layerSelectionChanged,
+            activeLayerChanged,
+            sideRefresh,
+            dropDown
+        } = bindings;
 
-        fabric.removeHandler?.('layer-selection-changed', boardRefresh);
-        fabric.removeHandler?.('active-layer-changed', boardRefresh);
-        fabric.removeHandler?.('annotation-selection-changed', boardRefresh);
+        fabric.removeHandler('annotation-selection-changed', annotationSelectionChanged);
+        fabric.removeHandler('layer-selection-changed', layerSelectionChanged);
+        fabric.removeHandler('active-layer-changed', activeLayerChanged);
 
-        fabric.removeHandler?.('layer-objects-changed', sideRefresh);
-        fabric.removeHandler?.('annotation-create', sideRefresh);
-        fabric.removeHandler?.('annotation-delete', sideRefresh);
-        fabric.removeHandler?.('annotation-replace', sideRefresh);
-        fabric.removeHandler?.('layer-added', sideRefresh);
-        fabric.removeHandler?.('layer-removed', sideRefresh);
+        fabric.removeHandler('layer-objects-changed', sideRefresh);
+        fabric.removeHandler('annotation-create', sideRefresh);
+        fabric.removeHandler('annotation-delete', sideRefresh);
+        fabric.removeHandler('annotation-replace', sideRefresh);
+        fabric.removeHandler('layer-added', sideRefresh);
+        fabric.removeHandler('layer-removed', sideRefresh);
+
+        fabric.removeHandler('nonprimary-release-not-handled', dropDown);
 
         delete state._fabricEventBindings;
     },
@@ -480,14 +594,23 @@ ${UIComponents.Elements.checkBox({ label: this.t('annotations.comments.autoOpen'
         const state = this._getViewerUI(viewerOrId);
         if (!state?.presetInner) return;
 
+        // Get current IDs for comparison
+        const leftId = this.context.getPreset(true)?.presetID;
+        const rightId = this.context.getPreset(false)?.presetID;
+
         const nodes = [];
         let pushed = false;
         this.context.presets.foreach((preset) => {
+            const isLeft = preset.presetID === leftId;
+            const isRight = preset.presetID === rightId;
+            const activeStyle = (isLeft || isRight) ? 'bg-base-200 border-base-300' : 'border-transparent';
+
             const containerCss = this.isUnpreferredPreset(preset.presetID) ? 'opacity-50' : '';
             const category = preset.meta?.category?.value || this.t('annotations.viewerMenu.unknownPreset');
+
             nodes.push(button({
                     type: 'button',
-                    class: `btn btn-ghost btn-sm justify-start w-full ${containerCss}`.trim(),
+                    class: `btn btn-ghost btn-sm justify-start w-full gap-2 border ${containerCss} ${activeStyle}`.trim(),
                     onclick: () => this._clickPresetSelect(true, preset.presetID),
                     oncontextmenu: (e) => {
                         e.preventDefault();
@@ -495,8 +618,11 @@ ${UIComponents.Elements.checkBox({ label: this.t('annotations.comments.autoOpen'
                         return false;
                     }
                 },
-                span({ class: `fa-auto ${preset.objectFactory.getIcon()} mr-2`, style: `color:${preset.color};` }),
-                span({ class: 'truncate' }, category)
+                span({ class: `fa-auto ${preset.objectFactory.getIcon()}`, style: `color:${preset.color};` }),
+                span({ class: 'truncate flex-1 text-left' }, category),
+                // Show L/R indicators
+                isLeft ? span({class: 'badge badge-primary badge-xs h-4 min-h-0 w-4 p-0 font-bold'}, 'L') : null,
+                isRight ? span({class: 'badge badge-outline badge-xs h-4 min-h-0 w-4 p-0 font-bold'}, 'R') : null
             ));
             pushed = true;
         });
@@ -513,20 +639,49 @@ ${UIComponents.Elements.checkBox({ label: this.t('annotations.comments.autoOpen'
     },
 
     _toggleEnabled(btnElement) {
-        this.context.enableAnnotations(this.context.disabledInteraction);
-        this._updateViewerControls();
+        const currentlyEnabled = !this.context.disabledInteraction;
+        const nextEnabled = !currentlyEnabled;
 
-        const toolBar =
-            document.getElementById('annotations-tool-bar-content') ||
-            document.getElementById('annotations-tool-bar');
-
-        if (toolBar) {
-            const enabled = !this.context.disabledInteraction;
-            toolBar.style.pointerEvents = enabled ? 'auto' : 'none';
-            toolBar.style.opacity = enabled ? '1' : '0.5';
-            toolBar.setAttribute('aria-disabled', enabled ? 'false' : 'true');
-            toolBar.classList.toggle('disabled', !enabled);
+        if (!nextEnabled) {
+            for (const viewer of VIEWER_MANAGER.viewers || []) {
+                this._getViewerUI(viewer.uniqueId)?.boardPanel?.commitEdit?.();
+            }
         }
+
+        this.context.history.push(
+            () => {
+                this.context.enableAnnotations(nextEnabled);
+                this._updateViewerControls();
+                this._refreshAllBoardPanels();
+
+                const toolBar =
+                    document.getElementById('annotations-tool-bar-content') ||
+                    document.getElementById('annotations-tool-bar');
+
+                if (toolBar) {
+                    toolBar.style.pointerEvents = nextEnabled ? 'auto' : 'none';
+                    toolBar.style.opacity = nextEnabled ? '1' : '0.5';
+                    toolBar.setAttribute('aria-disabled', nextEnabled ? 'false' : 'true');
+                    toolBar.classList.toggle('disabled', !nextEnabled);
+                }
+            },
+            () => {
+                this.context.enableAnnotations(currentlyEnabled);
+                this._updateViewerControls();
+                this._refreshAllBoardPanels();
+
+                const toolBar =
+                    document.getElementById('annotations-tool-bar-content') ||
+                    document.getElementById('annotations-tool-bar');
+
+                if (toolBar) {
+                    toolBar.style.pointerEvents = currentlyEnabled ? 'auto' : 'none';
+                    toolBar.style.opacity = currentlyEnabled ? '1' : '0.5';
+                    toolBar.setAttribute('aria-disabled', currentlyEnabled ? 'false' : 'true');
+                    toolBar.classList.toggle('disabled', !currentlyEnabled);
+                }
+            }
+        );
     },
 
     _populateAuthorsList(viewerOrId = undefined) {
@@ -572,10 +727,38 @@ ${UIComponents.Elements.checkBox({ label: this.t('annotations.comments.autoOpen'
     _updateViewerControls(viewerOrId = undefined) {
         const apply = (state) => {
             if (!state) return;
+
+            const enabled = !this.context.disabledInteraction;
+
+            state.enableButton?.classList.toggle('btn-active', enabled);
             state.outlineButton?.classList.toggle('btn-active', !!this.context.getAnnotationCommonVisualProperty('modeOutline'));
             state.edgeButton?.classList.toggle('btn-active', !!this.getOption('edgeCursorNavigate', true));
+
             if (state.borderInput) state.borderInput.value = String(this.context.getAnnotationCommonVisualProperty('originalStrokeWidth'));
             if (state.opacityInput) state.opacityInput.value = String(this.context.getAnnotationCommonVisualProperty('opacity'));
+
+            const disableTargets = [
+                state.outlineButton,
+                state.edgeButton,
+                state.borderInput,
+                state.opacityInput,
+                state.presetTabButton,
+                state.annotationTabButton,
+                state.authorTabButton,
+                state.presetList,
+                state.annotationList,
+                state.authorList
+            ];
+
+            for (const el of disableTargets) {
+                if (!el) continue;
+                if ('disabled' in el) el.disabled = !enabled;
+                el.style.pointerEvents = enabled ? 'auto' : 'none';
+                el.style.opacity = enabled ? '1' : '0.45';
+                el.setAttribute?.('aria-disabled', enabled ? 'false' : 'true');
+            }
+
+            state.boardPanel?._setSortableEnabled?.(enabled);
         };
 
         if (viewerOrId) return apply(this._getViewerUI(viewerOrId));

@@ -66,11 +66,10 @@ function initXOpatUI() {
         /**
          * Show custom/dialog window
          * todo consider renaming
-         * @param parentId unique ID of the dialog container, you can hide the window by removing this ID from DOM
-         *  might not complete or remove existing ID if not unique
-         * @param header HTML content to put in the header
-         * @param content HTML content
-         * @param footer HTML content to put to the footer
+         * @param parentId the ID of the plugin or module that attached this dialog
+         * @param header content to put in the header
+         * @param content content
+         * @param footer content to put to the footer
          * @param params
          * @param params.width custom width, can be a CSS value (string) or a number (pixels), by default it
          * @param params.isBlocking whether the dialog should block the user from interacting with the page, default true
@@ -88,7 +87,13 @@ function initXOpatUI() {
                 allowResize: params.allowResize ?? false,
             });
 
-            document.body.appendChild(modal.create());
+            const node = modal.create();
+            if (parentId) {
+                node.classList.add(parentId + "-plugin-root");
+            } else {
+                console.warn("Dialogs.showCustom() called without parent ID.");
+            }
+            document.body.appendChild(node);
             modal.open();
             return modal;
         },
@@ -384,7 +389,7 @@ aria-label="Close help" onclick="Dialogs.closeWindow('${id}')">
          */
         init: function() {
             document.addEventListener("click", this._toggle.bind(this, undefined, undefined));
-            $("body").append(`<ul id="drop-down-menu" oncontextmenu="return false;" style="display:none;width: auto; max-width: 300px;" class="menu menu-sm bg-base-100 rounded-box shadow"></ul>`);
+            $("body").append(`<ul id="drop-down-menu" oncontextmenu="return false;" style="display:none;width: auto; max-width: 300px; z-index: 999999999; position: fixed;" class="menu menu-sm bg-base-100 rounded-box shadow"></ul>`);
 
             this._body = $("#drop-down-menu");
         },

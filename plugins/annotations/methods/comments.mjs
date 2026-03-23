@@ -10,6 +10,18 @@ function createRemovedPlaceholder(commentId) {
     return removedEl;
 }
 
+function renderEmptyState(plugin) {
+    const { div, i, p } = globalThis.van.tags;
+    const empty = div({
+            id: 'comments-list-empty',
+            class: 'h-full flex flex-col items-center justify-center opacity-30 text-center gap-2 p-8 select-none'
+        },
+        i({ class: 'fa-solid fa-comments text-5xl mb-2' }),
+        p({ class: 'text-sm font-bold' }, plugin.t('annotations.comments.empty'))
+    );
+    return empty;
+}
+
 export const commentMethods = {
     enableComments(enabled) {
         if (this._commentsEnabled === enabled) return;
@@ -115,24 +127,10 @@ export const commentMethods = {
         if (!commentsList) return;
 
         this._clearComments();
+
+        // Use refactored Empty State
         if (!comments || comments.filter((c) => !c.removed).length === 0) {
-            const empty = document.createElement('div');
-            empty.id = 'comments-list-empty';
-            empty.className = 'rounded-md flex items-center justify-center gap-2 w-full h-full select-none';
-            empty.style.background = 'var(--color-bg-canvas-inset)';
-            empty.style.padding = '15px';
-
-            const icon = document.createElement('i');
-            icon.className = 'fa-auto fa-comment text-4xl';
-            icon.style.color = 'var(--color-text-tertiary)';
-
-            const text = document.createElement('p');
-            text.className = 'text-sm';
-            text.style.color = 'var(--color-text-tertiary)';
-            text.textContent = this.t('annotations.comments.empty');
-
-            empty.append(icon, text);
-            commentsList.appendChild(empty);
+            commentsList.appendChild(renderEmptyState(this));
             return;
         }
 
@@ -181,146 +179,56 @@ export const commentMethods = {
         const commentsList = document.getElementById('comments-list');
         if (!commentsList) return;
 
-        const noCommentsElement = document.getElementById('comments-list-empty');
-        if (noCommentsElement) noCommentsElement.remove();
+        const noComments = document.getElementById('comments-list-empty');
+        if (noComments) noComments.remove();
 
+        const { div, span, button, i, p } = globalThis.van.tags;
+
+        // Modern Removed Placeholder
         if (isRemovedPlaceholder) {
-            commentsList.appendChild(createRemovedPlaceholder(comment.id));
+            const removed = div({
+                class: 'text-xs italic opacity-40 px-4 py-2 border-l-2 border-base-300',
+                dataset: { commentId: comment.id }
+            }, '[removed]');
+            commentsList.appendChild(removed);
             return;
         }
 
-        const element = document.createElement('div');
-        element.className = 'rounded-lg p-3 border-l-4';
-        element.style.background = 'var(--color-bg-canvas-inset)';
-        element.style.borderLeftColor = this.getColorForUser(comment.author.name);
-        element.dataset.commentId = comment.id;
-
-        if (comment.replyTo) {
-            element.style.marginLeft = '2em';
-            element.dataset.replyTo = comment.replyTo;
-        }
-
-        const header = document.createElement('div');
-        header.className = 'flex justify-between items-center mb-1';
-
-        const author = document.createElement('span');
-        author.className = 'font-medium text-sm';
-        author.style.color = 'var(--color-text-primary)';
-        author.textContent = comment.author.name;
-
-        const actions = document.createElement('div');
-        actions.className = 'flex items-center justify-center';
-
-        const createdAt = new Date(comment.createdAt);
-        const timestamp = document.createElement('span');
-        timestamp.setAttribute('name', 'created-at');
-        timestamp.className = 'text-xs mr-2';
-        timestamp.style.color = 'var(--color-text-secondary)';
-        timestamp.title = createdAt.toLocaleString();
-        timestamp.textContent = this._formatTimeAgo(createdAt);
-
-        actions.appendChild(timestamp);
-
         const isAuthor = this.user?.id === (this.context.mapAuthorCallback?.(comment.author.id) ?? comment.author.id);
-        if (isAuthor) {
-            const deleteButton = document.createElement('button');
-            deleteButton.type = 'button';
-            deleteButton.className = 'relative';
-            deleteButton.title = this.t('annotations.comments.delete');
-            deleteButton.dataset.confirmed = 'false';
+        const userColor = this.getColorForUser(comment.author.name);
 
-            const icon = document.createElement('i');
-            icon.className = 'fa-auto fa-trash btn-pointer';
-            icon.style.fontSize = '21px';
-            icon.style.color = 'var(--color-text-danger)';
+        const element = div({
+                class: `group relative flex flex-col gap-1 p-3 rounded-xl bg-base-200/40 hover:bg-base-200 transition-all border-l-4 ${comment.replyTo ? 'ml-8' : ''}`,
+                style: `border-left-color: ${userColor};`,
+                dataset: { commentId: comment.id, replyTo: comment.replyTo || '' }
+            },
+            // Header: Author & Time
+            div({ class: 'flex justify-between items-center' },
+                span({ class: 'text-xs font-bold text-primary truncate' }, comment.author.name),
+                span({
+                    class: 'text-[10px] opacity-40 uppercase font-mono',
+                    name: 'created-at',
+                    title: new Date(comment.createdAt).toLocaleString()
+                }, this._formatTimeAgo(new Date(comment.createdAt)))
+            ),
+            // Content
+            p({ class: 'text-sm leading-relaxed pr-6' }, comment.content),
 
-            const hint = document.createElement('div');
-            hint.className = 'delete-hint hidden right-[30px] top-1/2 -translate-y-1/2 px-2 py-1 rounded-md p-2 text-xs absolute whitespace-nowrap';
-            hint.style.zIndex = '10';
-            hint.style.background = 'var(--color-bg-canvas-inset)';
-            hint.style.color = 'var(--color-text-danger)';
-            hint.textContent = this.t('annotations.comments.confirmDelete');
+            // Floating Actions (Visible on Hover)
+            div({ class: 'absolute right-2 top-2 flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity' },
+                !comment.replyTo && this.user ? button({
+                    class: 'btn btn-ghost btn-xs btn-square',
+                    onclick: (e) => this._showReplyBox(e, comment.id),
+                    title: this.t('annotations.comments.reply')
+                }, i({ class: 'fa-solid fa-reply' })) : null,
 
-            deleteButton.append(icon, hint);
-            deleteButton.addEventListener('click', (event) => {
-                const confirmed = event.currentTarget.dataset.confirmed === 'true';
-                if (confirmed) {
-                    this._deleteComment(comment);
-                } else {
-                    event.currentTarget.dataset.confirmed = 'true';
-                    hint.classList.remove('hidden');
-                }
-            });
-            deleteButton.addEventListener('mouseleave', (event) => {
-                event.currentTarget.dataset.confirmed = 'false';
-                hint.classList.add('hidden');
-            });
-            actions.appendChild(deleteButton);
-        }
-
-        if (!comment.replyTo && this.user) {
-            const replyButton = document.createElement('button');
-            replyButton.type = 'button';
-            replyButton.className = 'relative';
-            replyButton.title = this.t('annotations.comments.reply');
-            replyButton.dataset.reply = comment.id;
-
-            const icon = document.createElement('i');
-            icon.className = 'fa-auto fa-reply btn-pointer';
-            icon.style.fontSize = '21px';
-            icon.style.color = 'var(--color-text-secondary)';
-            replyButton.appendChild(icon);
-
-            replyButton.addEventListener('click', () => {
-                if (element.querySelector('.reply-box')) return;
-
-                const replyBox = document.createElement('div');
-                replyBox.className = 'reply-box mt-2 flex flex-col gap-2';
-
-                const textarea = document.createElement('textarea');
-                textarea.className = 'resize-none flex-1 px-3 py-2 text-sm border-[1px] border-[var(--color-border-secondary)] rounded-md focus:outline-none focus:border-[var(--color-border-info)]';
-                textarea.style.background = 'var(--color-bg-primary)';
-                textarea.style.color = 'var(--color-text-primary)';
-                textarea.rows = 2;
-                textarea.placeholder = this.t('annotations.comments.replyPlaceholder');
-                textarea.disabled = !this.user;
-
-                const actionsRow = document.createElement('div');
-                actionsRow.className = 'flex gap-2 justify-end';
-
-                const cancel = document.createElement('button');
-                cancel.type = 'button';
-                cancel.className = 'reply-cancel-btn btn px-2 py-1 rounded text-xs text-[var(--color-text-primary)] hover:text-black';
-                cancel.textContent = this.t('common.cancel');
-                cancel.addEventListener('click', () => replyBox.remove());
-
-                const submit = document.createElement('button');
-                submit.type = 'button';
-                submit.className = 'reply-submit-btn btn btn-pointer px-2 py-1 rounded text-xs';
-                submit.textContent = this.t('annotations.comments.reply');
-                submit.addEventListener('click', () => {
-                    const text = textarea.value.trim();
-                    if (!text) return;
-                    this._addReplyComment(comment.id, text);
-                    replyBox.remove();
-                });
-
-                actionsRow.append(cancel, submit);
-                replyBox.append(textarea, actionsRow);
-                element.appendChild(replyBox);
-            });
-
-            actions.appendChild(replyButton);
-        }
-
-        header.append(author, actions);
-
-        const body = document.createElement('p');
-        body.className = 'text-sm';
-        body.style.color = 'var(--color-text-secondary)';
-        body.textContent = comment.content;
-
-        element.append(header, body);
+                isAuthor ? button({
+                    class: 'btn btn-ghost btn-xs btn-square text-error',
+                    onclick: () => this._deleteComment(comment),
+                    title: this.t('annotations.comments.delete')
+                }, i({ class: 'fa-solid fa-trash' })) : null
+            )
+        );
 
         if (parentId) {
             const parentEl = commentsList.querySelector(`[data-comment-id="${parentId}"]`);
@@ -339,6 +247,35 @@ export const commentMethods = {
         } else {
             commentsList.appendChild(element);
         }
+    },
+
+    _showReplyBox(event, parentId) {
+        const commentEl = event.currentTarget.closest('[data-comment-id]');
+        if (commentEl.querySelector('.reply-box')) return;
+
+        const { div, textarea, button } = globalThis.van.tags;
+
+        const replyBox = div({ class: 'reply-box mt-3 flex flex-col gap-2 p-2 bg-base-100 rounded-lg border border-base-300 shadow-inner' },
+            textarea({
+                class: 'textarea textarea-bordered textarea-sm w-full focus:outline-none',
+                placeholder: this.t('annotations.comments.replyPlaceholder'),
+                rows: 2
+            }),
+            div({ class: 'flex justify-end gap-2' },
+                button({ class: 'btn btn-ghost btn-xs', onclick: (e) => e.currentTarget.closest('.reply-box').remove() }, this.t('common.cancel')),
+                button({
+                    class: 'btn btn-primary btn-xs',
+                    onclick: (e) => {
+                        const text = e.currentTarget.closest('.reply-box').querySelector('textarea').value;
+                        if (text.trim()) {
+                            this._addReplyComment(parentId, text);
+                            e.currentTarget.closest('.reply-box').remove();
+                        }
+                    }
+                }, this.t('annotations.comments.reply'))
+            )
+        );
+        commentEl.appendChild(replyBox);
     },
 
     _addReplyComment(parentId, text) {

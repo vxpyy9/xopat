@@ -1169,16 +1169,16 @@
         value = Math.abs(value);
         // No support for NM
         if (value < 0.000001) {
-            return (negative ? "-" : "") + (Math.round(value * 100000000000000) / 100) + " μ" + unitSuffix;
+            return (negative ? "-" : "") + getWithSpaces(Math.round(value * 100000000000000) / 100, " μ" + unitSuffix);
         }
         if (value < 1) {
-            return (negative ? "-" : "") + (Math.round(value * 100000000) / 100) + " m" + unitSuffix;
+            return (negative ? "-" : "") + getWithSpaces(Math.round(value * 100000000) / 100, " m" + unitSuffix);
         }
         if (value < 1000000) {
-            return (negative ? "-" : "") + (Math.round(value * 100) / 100) + unitSuffix;
+            return (negative ? "-" : "") + getWithSpaces(Math.round(value * 100) / 100, unitSuffix);
         }
         if (value >= 1000000) {
-            return (negative ? "-" : "") + (Math.round(value / 10) / 100) + " k" + unitSuffix;
+            return (negative ? "-" : "") + getWithSpaces(Math.round(value / 10) / 100, " k" + unitSuffix);
         }
         return (negative ? "-" : "") + getWithSpaces(Math.round(value) / 1000, "k" + unitSuffix);
     }

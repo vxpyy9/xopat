@@ -1,102 +1,81 @@
 /**
  * Build the floating comments window body for the annotations plugin.
- * Uses DOM/van nodes instead of handwritten HTML strings.
  * @param {AnnotationsGUI} plugin
  * @returns {UIElement}
  */
 export function createCommentsWindow(plugin) {
-  const UI = globalThis.UI;
-  const { div, textarea, button, i } = globalThis.van.tags;
+    const UI = globalThis.UI;
+    const { div, textarea, button, i } = globalThis.van.tags;
 
-  const body = div(
-    {
-      class: 'w-full h-full relative flex flex-col'
-    },
-    div({
-      id: 'comments-list',
-      class: 'flex-1 overflow-y-auto space-y-3 p-2'
-    }),
-    div(
-      {
-        id: 'comments-input-section',
-        class: 'pt-3',
-        style: 'border-top: 1px solid var(--color-border-secondary);'
-      },
-      div(
-        { class: 'flex gap-2' },
-        textarea({
-          id: 'comment-input',
-          rows: '2',
-          disabled: !plugin.user,
-          placeholder: plugin.t('annotations.comments.inputPlaceholder'),
-          class: 'resize-none flex-1 px-3 py-2 text-sm border-[1px] border-[var(--color-border-secondary)] rounded-md focus:outline-none focus:border-[var(--color-border-info)]',
-          style: 'background: var(--color-bg-primary); color: var(--color-text-primary);',
-          onkeydown: (event) => {
-            if (event.key === 'Enter' && !event.shiftKey) {
-              event.preventDefault();
-              plugin._addComment();
-            }
-          }
+    const body = div(
+        { class: 'w-full h-full relative flex flex-col bg-base-100' },
+        // Scrollable List Area
+        div({
+            id: 'comments-list',
+            class: 'flex-1 overflow-y-auto p-4 space-y-4 custom-scrollbar'
         }),
-        button(
-          {
-            type: 'button',
-            class: 'px-3 py-2 btn btn-pointer',
-            style: 'font-size: 22px;',
-            onclick: () => plugin._addComment(),
-            title: plugin.t('annotations.comments.send')
-          },
-          i({ class: 'fa-auto fa-paper-plane' })
+        div(
+            {
+                id: 'comments-input-section',
+                class: 'p-3 bg-base-200/50 border-t border-base-300'
+            },
+            div(
+                { class: 'flex items-end gap-2 bg-base-100 p-2 rounded-xl border border-base-300 shadow-sm focus-within:border-primary transition-colors' },
+                textarea({
+                    id: 'comment-input',
+                    rows: '1',
+                    disabled: !plugin.user,
+                    placeholder: plugin.t('annotations.comments.inputPlaceholder'),
+                    class: 'textarea textarea-ghost flex-1 min-h-0 h-10 py-2 leading-tight focus:bg-transparent resize-none text-sm focus:outline-none',
+                    onkeydown: (event) => {
+                        if (event.key === 'Enter' && !event.shiftKey) {
+                            event.preventDefault();
+                            plugin._addComment();
+                        }
+                    }
+                }),
+                button(
+                    {
+                        type: 'button',
+                        class: 'btn btn-primary btn-sm btn-square h-10 w-10 min-h-0',
+                        onclick: () => plugin._addComment(),
+                        title: plugin.t('annotations.comments.send')
+                    },
+                    i({ class: 'fa-solid fa-paper-plane' })
+                )
+            )
         )
-      )
-    )
-  );
+    );
 
-  return new UI.FloatingWindow(
-    {
-      id: 'annotation-comments-menu',
-      title: plugin.t('annotations.comments.title'),
-      closable: false,
-      onClose: () => {
-        plugin.commentsToggleWindow(false);
-      }
-    },
-    body
-  );
+    return new UI.FloatingWindow(
+        {
+            id: 'annotation-comments-menu',
+            title: plugin.t('annotations.comments.title'),
+            closable: false,
+            onClose: () => plugin.commentsToggleWindow(false)
+        },
+        body
+    );
 }
 
-/**
- * Apply the temporary styling/behavior tweaks required by the current FloatingWindow implementation.
- * @param {AnnotationsGUI} plugin
- */
 export function finalizeCommentsWindowMount(plugin) {
-  const commentsMenu = document.getElementById('annotation-comments-menu');
-  if (!commentsMenu) return;
+    const menu = document.getElementById('annotation-comments-menu');
+    if (!menu) return;
 
-  const commentsBody = commentsMenu.querySelector('.card-body > div');
-  if (commentsBody) {
-    commentsBody.style.width = '100%';
-    commentsBody.style.height = '100%';
-    commentsBody.style.position = 'relative';
-    commentsBody.style.display = 'flex';
-    commentsBody.style.flexDirection = 'column';
-  }
+    // CRITICAL: Force display none so it's hidden on app load
+    menu.style.display = 'none';
 
-  const commentsResize = commentsMenu.querySelector('.cursor-se-resize');
-  if (commentsResize) {
-    commentsResize.style.borderColor = 'var(--color-text-primary)';
-  }
+    // DaisyUI Window styling
+    menu.classList.add('shadow-2xl', 'rounded-2xl', 'border', 'border-base-300', 'overflow-hidden', 'bg-base-100');
+    menu.style.minWidth = '340px';
+    menu.style.minHeight = '420px';
 
-  commentsMenu.style.display = 'none';
-  commentsMenu.classList.add(
-    'flex-col',
-    'shadow-lg',
-    'rounded-lg',
-    'border',
-    'overflow-hidden',
-    'bg-[var(--color-bg-primary)]'
-  );
-  commentsMenu.style.borderColor = 'var(--color-border-primary)';
-  commentsMenu.style.minWidth = '320px';
-  commentsMenu.style.minHeight = '370px';
+    const header = menu.querySelector('.card-header');
+    if (header) {
+        header.className = 'flex items-center justify-between px-4 py-2 bg-base-200/50 border-b border-base-300 text-[10px] font-bold uppercase tracking-widest opacity-50';
+    }
+
+    // Handle the bottom resize handle
+    const resizer = menu.querySelector('.cursor-se-resize');
+    if (resizer) resizer.className = 'absolute bottom-1 right-1 w-4 h-4 opacity-20 hover:opacity-100 cursor-se-resize';
 }

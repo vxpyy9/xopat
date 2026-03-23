@@ -111,7 +111,6 @@ export class AnnotationBoardPanel {
                 id: this.containerId,
                 extraClasses: 'relative flex flex-col h-full min-h-0 annotation-board-panel'
             },
-            this._styleBlock(),
             new UI.Div({
                     id: this.headerId,
                     extraClasses: 'flex items-center gap-2 px-2 py-2 border-b border-base-300 sticky top-0 bg-base-100 z-10'
@@ -124,7 +123,7 @@ export class AnnotationBoardPanel {
                         extraClasses: 'btn btn-ghost btn-xs',
                         extraProperties: { title: this.plugin.t('annotations.board.createLayer') },
                         onClick: () => this.fabric?.createLayer()
-                    }, new UI.FAIcon('fa-circle-plus')),
+                    }, this.plugin.t('annotations.board.layer'),new UI.FAIcon('fa-circle-plus')),
                     this.deleteButton,
                     new UI.Button({
                         id: `${this.containerId}-refresh`,
@@ -203,9 +202,6 @@ export class AnnotationBoardPanel {
         if (!root) return;
         root.querySelectorAll('.history-selected').forEach(el => {
             el.classList.remove('history-selected');
-            try {
-                if (Sortable?.utils?.deselect) Sortable.utils.deselect(el);
-            } catch {}
         });
     }
 
@@ -218,10 +214,16 @@ export class AnnotationBoardPanel {
             const el = this.root.querySelector(`[data-type="${type}"][data-id="${String(id)}"]`);
             if (!el) continue;
             el.classList.add('history-selected');
-            try {
-                if (Sortable?.utils?.select) Sortable.utils.select(el);
-            } catch {}
         }
+    }
+
+    _clearBoardSelectionDomExcept(item) {
+        const boardEl = this.layerLogsEl;
+        if (!boardEl) return;
+        boardEl.querySelectorAll('.history-selected').forEach(el => {
+            if (el === item) return;
+            el.classList.remove('history-selected');
+        });
     }
 
     _flushPendingRender() {
@@ -246,20 +248,6 @@ export class AnnotationBoardPanel {
 
     _isModifierEvent(event) {
         return !!(event && (event.ctrlKey || event.metaKey || event.shiftKey));
-    }
-
-    _clearBoardSelectionDomExcept(item) {
-        const boardEl = this.layerLogsEl;
-        if (!boardEl) return;
-        this._withSelectionSyncPaused(() => {
-            boardEl.querySelectorAll('.history-selected').forEach(el => {
-                if (el === item) return;
-                try {
-                    if (Sortable?.utils?.deselect) Sortable.utils.deselect(el);
-                } catch {}
-                el.classList.remove('history-selected');
-            });
-        });
     }
 
     _selectSingleBoardItem(type, id, item) {
@@ -393,70 +381,61 @@ export class AnnotationBoardPanel {
         wrapper.id = this.getLayerElementId(layerId);
         wrapper.dataset.type = 'layer';
         wrapper.dataset.id = layerId;
-        wrapper.className = 'rounded-2';
-
-        const row = document.createElement('div');
-        row.className = 'd-flex align-items-center';
-        row.style.cssText = 'cursor:pointer; padding:2px 0; min-width:0; margin:0;';
+        wrapper.className = 'group flex flex-col border-b border-base-300 last:border-none mb-1';
 
         const collapsed = this._collapsedLayers.has(layerId);
-        const toggleArrow = faIcon(collapsed ? 'chevron_right' : 'expand_more', 'btn-pointer no-select');
-        toggleArrow.title = this.plugin.t('annotations.board.toggleAnnotations');
-        toggleArrow.addEventListener('pointerdown', e => e.stopPropagation());
-        toggleArrow.addEventListener('click', e => {
+        const annCount = Number(layer.getAnnotationCount?.() ?? layer.getObjects?.().length ?? 0);
+
+        const row = document.createElement('div');
+        row.className = 'flex items-center gap-2 px-2 py-2 hover:bg-base-200 cursor-pointer transition-colors';
+
+        // Toggle Arrow
+        const toggleBtn = document.createElement('div');
+        toggleBtn.className = `px-1 transition-transform duration-200 ${collapsed ? '' : 'rotate-90'}`;
+        toggleBtn.appendChild(faIcon('chevron_right', 'text-xs opacity-50'));
+        toggleBtn.onclick = (e) => {
             e.stopPropagation();
             if (collapsed) this._collapsedLayers.delete(layerId);
             else this._collapsedLayers.add(layerId);
             this.requestRender(true);
-        });
+        };
 
-        const middle = document.createElement('div');
-        middle.style.cssText = 'overflow:hidden; text-overflow:ellipsis; white-space:nowrap; flex:1;';
+        const info = document.createElement('div');
+        info.className = 'flex-1 min-w-0 flex items-center gap-2';
 
-        const nameSpan = document.createElement('span');
-        nameSpan.className = 'layer-name-text';
-        nameSpan.textContent = layer.name || `Layer ${layer.label}`;
-        nameSpan.title = this.plugin.t('annotations.board.renameLayer');
-        nameSpan.style.fontWeight = '600';
-        nameSpan.style.fontSize = '11px';
-        nameSpan.addEventListener('dblclick', e => this.renameLayerInline(layerId, e));
+        const name = document.createElement('span');
+        name.className = 'text-sm font-bold truncate';
+        layer.name = layer.name || this.plugin.t('annotations.board.layerName', {name: layer.label || ''});
+        name.textContent = layer.name;
 
-        const countSpan = document.createElement('span');
-        countSpan.className = 'annotation-count opacity-60';
-        countSpan.style.marginLeft = '8px';
-        countSpan.style.fontSize = '11px';
-        const annCount = Number(layer.getAnnotationCount?.() ?? layer.getObjects?.().length ?? 0);
-        countSpan.textContent = `${annCount} item${annCount === 1 ? '' : 's'}`;
+        const badge = document.createElement('span');
+        badge.className = 'badge badge-ghost badge-sm opacity-70 font-mono';
+        badge.textContent = annCount;
 
-        const areaSpan = document.createElement('span');
-        areaSpan.className = 'float-right opacity-60';
-        areaSpan.style.fontSize = '11px';
-        areaSpan.style.marginLeft = '8px';
-        areaSpan.textContent = `Σ ${this._formatArea(this._computeLayerArea(layer))}`;
+        const area = document.createElement('span');
+        area.className = 'text-[10px] opacity-40 ml-auto font-mono uppercase tracking-tighter';
+        area.textContent = `Σ ${this._formatArea(this._computeLayerArea(layer))}`;
 
-        middle.append(nameSpan, countSpan, areaSpan);
+        info.append(name, badge, area);
 
         const actions = document.createElement('div');
-        actions.className = 'flex items-center gap-1 no-select';
-        actions.style.marginRight = '4px';
+        actions.className = 'flex items-center opacity-0 group-hover:opacity-100 transition-opacity';
 
-        const visibility = faIcon(layer.visible ? 'visibility' : 'visibility_off', 'btn-pointer no-select');
-        visibility.title = this.plugin.t('annotations.board.toggleVisibility');
-        visibility.addEventListener('pointerdown', e => e.stopPropagation());
-        visibility.addEventListener('click', e => {
-            e.stopPropagation();
-            this.toggleLayerVisibility(layerId);
-        });
+        const visBtn = document.createElement('button');
+        visBtn.className = 'btn btn-ghost btn-xs btn-square';
+        visBtn.appendChild(faIcon(layer.visible ? 'visibility' : 'visibility_off'));
+        visBtn.onclick = (e) => { e.stopPropagation(); this.toggleLayerVisibility(layerId); };
 
-        actions.appendChild(visibility);
-        row.append(toggleArrow, middle, actions);
+        actions.appendChild(visBtn);
+        row.append(toggleBtn, info, actions);
         wrapper.appendChild(row);
 
         const annotationContainer = document.createElement('div');
         annotationContainer.id = this.getAnnotationContainerId(layerId);
-        annotationContainer.className = 'rounded-2';
+        annotationContainer.className = 'bg-base-100/50 ml-2'; // Slight indentation feel
         annotationContainer.dataset.layerContainer = 'true';
         annotationContainer.style.display = collapsed ? 'none' : 'block';
+
         for (const object of layer.getObjects?.() || []) {
             annotationContainer.appendChild(this._renderAnnotation(object));
         }
@@ -471,98 +450,56 @@ export class AnnotationBoardPanel {
         row.id = this.getAnnotationElementId(object.label);
         row.dataset.type = 'annotation';
         row.dataset.id = String(object.incrementId);
-        row.className = 'rounded-2 d-flex align-items-center';
-        row.style.boxSizing = 'border-box';
+        row.className = 'group/ann flex items-center gap-3 px-2 py-1 hover:bg-base-300/50 cursor-pointer border-l-4 border-transparent history-item-row transition-all';
+
+        const color = this.fabric.getAnnotationColor?.(object) || 'var(--fallback-bc,black)';
+        row.style.borderLeftColor = color;
+
+        // We'll use a Drag Handle icon instead of Up/Down arrows to clean up space
+        const dragHandle = document.createElement('div');
+        dragHandle.className = 'opacity-0 group-hover/ann:opacity-30 cursor-grab active:cursor-grabbing';
+        dragHandle.appendChild(faIcon('fa-grip-vertical', 'text-xs'));
+
+        const iconBox = document.createElement('div');
+        iconBox.className = 'flex-shrink-0 flex items-center justify-center w-5';
+        const objectIcon = factoryIcon(factory?.getIcon?.() || 'fa-tag');
+        objectIcon.style.color = color;
+        iconBox.appendChild(objectIcon);
+
+        const content = document.createElement('div');
+        content.className = 'flex-1 min-w-0 leading-tight';
+
+        const title = document.createElement('div');
+        title.className = 'text-sm font-medium truncate';
+        title.textContent = this._getAnnotationDisplayText(object);
+
+        const subText = document.createElement('div');
+        subText.className = 'text-[10px] opacity-50 flex gap-2 items-center';
+        const area = factory?.getArea?.(object);
+        const time = new Date(object.created).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+        subText.innerHTML = `<span>${time}</span> • <span>${area ? this._formatArea(area) : 'No area'}</span>`;
+
+        content.append(title, subText);
+
+        const actions = document.createElement('div');
+        actions.className = 'flex gap-0.5 opacity-0 group-hover/ann:opacity-100';
+
+        if (factory?.isEditable?.()) {
+            const editBtn = document.createElement('button');
+            editBtn.className = 'btn btn-ghost btn-xs btn-square';
+            editBtn.appendChild(faIcon('edit'));
+            editBtn.onclick = (e) => {
+                e.stopPropagation();
+                this._boardItemEdit(editBtn, this._getFocusBBox(object, factory), object);
+            };
+            actions.appendChild(editBtn);
+        }
+
+        row.append(dragHandle, iconBox, content, actions);
 
         const focus = this._getFocusBBox(object, factory);
-        row.addEventListener('click', (event) => this._clickBoardElement(focus, object.incrementId, event));
-        row.addEventListener('contextmenu', (event) => {
-            event.preventDefault();
-            this._clickBoardElement(focus, object.incrementId, event);
-        });
+        row.addEventListener('click', (e) => this._clickBoardElement(focus, object.incrementId, e));
 
-        const arrows = document.createElement('div');
-        arrows.className = 'd-flex flex-column align-items-center annotation-arrows no-select';
-        arrows.style.marginRight = '0';
-
-        const up = faIcon('arrow_upward', 'btn-pointer');
-        up.style.fontSize = '12px';
-        up.title = this.plugin.t('annotations.board.moveUp');
-        up.addEventListener('pointerdown', e => e.stopPropagation());
-        up.addEventListener('click', e => {
-            e.stopPropagation();
-            this.moveAnnotationInBoard(object.incrementId, 'up');
-        });
-
-        const down = faIcon('arrow_downward', 'btn-pointer');
-        down.style.fontSize = '12px';
-        down.title = this.plugin.t('annotations.board.moveDown');
-        down.addEventListener('pointerdown', e => e.stopPropagation());
-        down.addEventListener('click', e => {
-            e.stopPropagation();
-            this.moveAnnotationInBoard(object.incrementId, 'down');
-        });
-        arrows.append(up, down);
-
-        const objectIcon = factoryIcon(factory?.getIcon?.() || 'fa-tag');
-        objectIcon.style.verticalAlign = 'sub';
-        objectIcon.style.color = this.fabric.getAnnotationColor?.(object) || 'black';
-        objectIcon.style.margin = '0';
-        objectIcon.style.padding = '0';
-
-        const textWrap = document.createElement('div');
-        textWrap.style.width = 'calc(100% - 80px)';
-        textWrap.className = 'd-inline-block';
-
-        const desc = document.createElement('input');
-        desc.type = 'text';
-        desc.name = 'category';
-        desc.readOnly = true;
-        desc.className = 'form-control border-0';
-        desc.style.background = 'transparent';
-        desc.style.color = 'inherit';
-        desc.style.display = 'inline-block';
-        desc.style.paddingLeft = '0';
-        desc.value = this._getAnnotationDisplayText(object);
-
-        const descLabel = document.createElement('label');
-        descLabel.className = 'show-hint d-block py-1';
-        descLabel.style.whiteSpace = 'nowrap';
-        descLabel.style.paddingLeft = '0';
-        descLabel.dataset.hint = new Date(object.created).toLocaleString();
-        descLabel.appendChild(desc);
-        textWrap.appendChild(descLabel);
-
-        const metric = document.createElement('span');
-        metric.className = 'float-right';
-        const area = factory?.getArea?.(object);
-        const length = factory?.getLength?.(object);
-        if (area) metric.textContent = `${this.plugin.t('annotations.board.area')} ${this._formatArea(area)}`;
-        else if (length) metric.textContent = `${this.plugin.t('annotations.board.length')} ${Number(length).toFixed?.(2) ?? length}`;
-        if (metric.textContent) textWrap.appendChild(metric);
-
-        if (object.private) {
-            const privateIcon = faIcon('visibility_lock');
-            privateIcon.style.verticalAlign = 'sub';
-            row.appendChild(privateIcon);
-        }
-
-        let editButton = null;
-        if (factory?.isEditable?.()) {
-            editButton = faIcon('edit', 'btn-pointer v-align-top mt-1 no-select');
-            editButton.dataset.mode = 'edit';
-            editButton.title = this.plugin.t('annotations.board.editAnnotation');
-            editButton.addEventListener('click', e => {
-                e.stopPropagation();
-                if (editButton.dataset.mode === 'edit') this._boardItemEdit(editButton, focus, object);
-                else this._boardItemSave();
-            });
-        }
-
-        row.appendChild(arrows);
-        row.appendChild(objectIcon);
-        row.appendChild(textWrap);
-        if (editButton) row.appendChild(editButton);
         return row;
     }
 
@@ -599,50 +536,8 @@ export class AnnotationBoardPanel {
         );
     }
 
-    renameLayerInline(layerID, evt) {
-        evt?.stopPropagation?.();
-        const layer = this.fabric.getLayer(layerID);
-        if (!layer) return;
-
-        const wrapper = this.root?.querySelector(`#${CSS.escape(this.getLayerElementId(layerID))}`);
-        const nameSpan = wrapper?.querySelector('.layer-name-text');
-        if (!nameSpan || nameSpan.dataset.editing === '1') return;
-
-        const current = layer.name || `Layer ${layer.label}`;
-        nameSpan.dataset.editing = '1';
-        nameSpan.textContent = '';
-        const input = document.createElement('input');
-        input.type = 'text';
-        input.className = 'input input-xs input-bordered';
-        input.value = current;
-        input.style.width = '90px';
-        input.style.maxWidth = '90px';
-        input.style.fontSize = '11px';
-        input.style.padding = '0 2px';
-        nameSpan.appendChild(input);
-
-        const commit = (save = true) => {
-            const val = input.value.trim();
-            layer.name = save && val.length ? val : undefined;
-            delete nameSpan.dataset.editing;
-            nameSpan.textContent = layer.name || `Layer ${layer.label}`;
-            this.requestRender();
-        };
-
-        input.addEventListener('keydown', e => {
-            if (e.key === 'Enter') commit(true);
-            else if (e.key === 'Escape') commit(false);
-        });
-        input.addEventListener('blur', () => commit(true));
-        input.focus();
-        input.select();
-    }
-
     toggleLayerVisibility(layerID) {
-        const layer = this.fabric.getLayer(layerID);
-        if (!layer) return;
-        layer.toggleVisibility();
-        this.requestRender();
+        this.fabric?.toggleLayerVisibility?.(layerID);
     }
 
     _updateActiveLayerVisual(activeLayer) {
@@ -714,7 +609,7 @@ export class AnnotationBoardPanel {
         self.textContent = 'save';
         self.style.color = '#d32f2f';
         this._editSelection = { self, target: object, incrementId: object.incrementId, input };
-        this.context.raiseEvent('annotation-edit', { object });
+        this.fabric.raiseEvent('annotation-edit', { object });
     }
 
     _boardItemSave(cancelOnly = false) {
@@ -1089,21 +984,11 @@ export class AnnotationBoardPanel {
         }
 
         if (oe?.shiftKey) {
-            this._withSelectionSyncPaused(() => {
-                item.classList.add('history-selected');
-                try {
-                    if (Sortable?.utils?.select) Sortable.utils.select(item);
-                } catch {}
-            });
+            item.classList.add('history-selected');
             return;
         }
 
-        this._withSelectionSyncPaused(() => {
-            item.classList.add('history-selected');
-            try {
-                if (Sortable?.utils?.select) Sortable.utils.select(item);
-            } catch {}
-        });
+        item.classList.add('history-selected');
         this._selectSingleBoardItem(type, id, item);
     }
 
@@ -1148,28 +1033,5 @@ export class AnnotationBoardPanel {
             if (Number.isFinite(area) && area > 0) sum += area;
         }
         return sum;
-    }
-
-    _styleBlock() {
-        return style(`
-      #${this.containerId} .rounded-2,
-      #${this.containerId} [data-type="layer"],
-      #${this.containerId} [data-type="annotation"],
-      #${this.containerId} [data-type="layer"] > .d-flex,
-      #${this.containerId} [data-type="annotation"] > .d-flex { border-radius: 0 !important; }
-      #${this.containerId} .history-selected[data-type="layer"] { position: relative; border:1px solid rgba(60,180,90,0.55); }
-      #${this.containerId} .history-selected[data-type="layer"]::before { content:""; position:absolute; left:0; top:0; width:16px; height:28px; background:rgba(60,180,90,0.18); pointer-events:none; }
-      #${this.containerId} .history-selected[data-type="layer"] > .d-flex { background: rgba(60,180,90,0.18); }
-      #${this.containerId} .history-layer-current { box-shadow: inset 0 0 0 1px rgba(60,180,90,0.85); }
-      #${this.containerId} .history-selected[data-type="annotation"] { background: rgba(60,180,90,0.18) !important; border:none; }
-      #${this.containerId} .annotation-arrows { opacity:0; transition:opacity .15s; pointer-events:none; }
-      #${this.containerId} [data-type="annotation"]:hover .annotation-arrows { opacity:1; pointer-events:auto; }
-      #${this.containerId} [data-layer-container="true"] { padding-left:0; min-height:10px; border-left:1px dashed transparent; }
-      #${this.containerId} [data-layer-container="true"] > [data-type="annotation"] { position:relative; margin-left:-16px; padding-left:26px; width:calc(100% + 16px); box-sizing:border-box; background:transparent; }
-      #${this.containerId} > #${this.layerLogsId} > [data-type="layer"] { margin-left:0; padding-left:16px; width:100%; box-sizing:border-box; }
-      #${this.containerId} .drop-hover { background: rgba(60,180,90,0.08); border-left-color: rgba(60,180,90,0.65); }
-      .drag-ghost { opacity:0.6; background:rgba(60,180,90,0.12); border:1px dashed rgba(60,180,90,0.6); }
-      .drag-chosen { box-shadow: inset 0 0 0 1px rgba(60,180,90,0.7); }
-    `);
     }
 }

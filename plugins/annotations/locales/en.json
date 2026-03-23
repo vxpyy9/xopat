@@ -10,6 +10,9 @@
       "border": "Border",
       "opacity": "Opacity",
       "editPresets": "Edit",
+      "unknownPreset": "Unknown",
+      "noPresetsPrefix": "No class presets available.",
+      "createPresetLink": "Create a preset to annotate.",
       "tabs": {
         "classes": "Classes",
         "annotations": "Annotations",
@@ -99,9 +102,14 @@
       "pick": "(pick)",
       "unitMismatch": "Unit mismatch ({{a}} vs {{b}})"
     },
+    "presets": {
+      "dialogTitle": "Annotation Class Presets"
+    },
     "board": {
       "title": "Annotation list",
       "createLayer": "Create layer",
+      "layer": "Layer",
+      "layerName": "Layer {{name}}",
       "deleteSelection": "Delete selection",
       "refresh": "Refresh list",
       "area": "Area"

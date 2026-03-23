@@ -59,7 +59,7 @@ class AnnotationsGUI extends XOpatPlugin {
     this.context.commentsEnabled = this._commentsEnabled;
     this._commentsClosedMethod = this.getOption('commentsClosedMethod', this.getStaticMeta('commentsClosedMethod', 'global'));
     this._commentsDefaultOpened = this.getOption('commentsDefaultOpened', this.getStaticMeta('commentsDefaultOpened', true));
-    this._commentsOpened = this._commentsDefaultOpened;
+    this._commentsOpened = false;
 
     await this.setupFromParams();
 

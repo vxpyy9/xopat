@@ -97,7 +97,7 @@ OSDAnnotations.Rect = class extends OSDAnnotations.AnnotationObjectFactory {
             left = theObject.left,
             top = theObject.top;
         theObject.set({ left: this._left??left, top: this._top??top, scaleX: 1, scaleY: 1,
-            hasControls: false, lockMovementX: true, lockMovementY: true});
+            lockMovementX: true, lockMovementY: true});
         let newObject = this.copy(theObject, {
             left: left, top: top, width: width, height: height
         });
@@ -330,7 +330,6 @@ OSDAnnotations.Ellipse = class extends OSDAnnotations.AnnotationObjectFactory {
             top: this._top ?? top,
             scaleX: 1,
             scaleY: 1,
-            hasControls: false,
             lockMovementX: true,
             lockMovementY: true
         });
@@ -561,7 +560,7 @@ OSDAnnotations.Text = class extends OSDAnnotations.AnnotationObjectFactory {
                 type: this.type,
                 factoryID: this.factoryID,
                 selectable: true,
-                hasControls: false,
+                hasControls: true,
                 lockUniScaling: true,
                 stroke: 'white',
                 fill: 'black',
@@ -580,7 +579,7 @@ OSDAnnotations.Text = class extends OSDAnnotations.AnnotationObjectFactory {
                 type: this.type,
                 factoryID: this.factoryID,
                 selectable: true,
-                hasControls: false,
+                hasControls: true,
                 lockUniScaling: true,
                 stroke: 'white',
                 fill: 'black',
@@ -715,8 +714,7 @@ OSDAnnotations.Text = class extends OSDAnnotations.AnnotationObjectFactory {
         }
 
         let newText = this._context.fabric.getAnnotationDescription(theObject, "category", true, false);
-        theObject.set({ left: this._left, top: this._top, scaleX: 1, scaleY: 1,
-            hasControls: false, lockMovementX: true, lockMovementY: true, editable: false});
+        theObject.set({ left: this._left, top: this._top, scaleX: 1, scaleY: 1, lockMovementX: true, lockMovementY: true, editable: false});
 
         let newObject = this.copy(theObject, {
             left: left,
@@ -918,8 +916,7 @@ OSDAnnotations.Point = class extends OSDAnnotations.Ellipse {
     recalculate(theObject, ignoreReplace=false) {
         let left = theObject.left,
             top = theObject.top;
-        theObject.set({ left: this._left, top: this._top,
-            hasControls: false, lockMovementX: true, lockMovementY: true});
+        theObject.set({ left: this._left, top: this._top, lockMovementX: true, lockMovementY: true});
         let newObject = this.copy(theObject, {x: left, y: top});
         theObject.calcACoords();
 
@@ -1142,7 +1139,6 @@ OSDAnnotations.ExplicitPointsObjectFactory = class extends OSDAnnotations.Annota
 
     recalculate(theObject, ignoreReplace=false) {
         theObject.controls = fabric.Object.prototype.controls;
-        theObject.hasControls = false;
         theObject.strokeWidth = this._presets.getCommonProperties().strokeWidth;
 
         if (!theObject.points.every(
@@ -1503,7 +1499,6 @@ OSDAnnotations.Line = class extends OSDAnnotations.AnnotationObjectFactory {
 
     recalculate(theObject, ignoreReplace=false) {
         theObject.controls = fabric.Object.prototype.controls;
-        theObject.hasControls = false;
         theObject.strokeWidth = this._presets.getCommonProperties().strokeWidth;
 
         if (!theObject.x1 != this._origPoints[0] || theObject.y1 != this._origPoints[1] ||
@@ -2176,7 +2171,6 @@ OSDAnnotations.Multipolygon = class extends OSDAnnotations.AnnotationObjectFacto
 
     recalculate(theObject) {
         theObject.controls = fabric.Object.prototype.controls;
-        theObject.hasControls = false;
         theObject.strokeWidth = this._presets.getCommonProperties().strokeWidth;
 
         if (this._pointsChanged) {

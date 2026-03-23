@@ -373,46 +373,31 @@ OSDAnnotations.FabricWrapper = class extends XOpatViewerSingleton {
      * @param {boolean} on
      */
     enableAnnotations(on) {
-        let objects = this.canvas.getObjects();
+        const objects = this.canvas.getObjects();
 
-        if (on) {
-            //set all objects as visible and unlock
-            for (let i = 0; i < objects.length; i++) {
-                objects[i].visible = true;
-
-                objects[i].lockRotation = false;
-                objects[i].lockScalingFlip = false;
-                objects[i].lockScalingX = false;
-                objects[i].lockScalingY = false;
-                objects[i].lockUniScaling = false;
-            }
-            if (this._cachedTargetCanvasSelection) {
-                const selection = this._cachedTargetCanvasSelection;
-                if (Array.isArray(selection) && selection.length > 1) {
-                    selection.forEach(obj => {
-                        this.selectAnnotation(obj, true);
-                    });
-                } else {
-                    this.selectAnnotation(selection[0], true);
-                }
-            }
-        } else {
+        if (!on) {
             this._cachedTargetCanvasSelection = this.getSelectedAnnotations();
-            for (let i = 0; i < objects.length; i++) {
-                //set all objects as invisible and lock in position
-                objects[i].visible = false;
-                objects[i].lockMovementX = true;
-                objects[i].lockMovementY = true;
-                objects[i].lockRotation = true;
-                objects[i].lockScalingFlip = true;
-                objects[i].lockScalingX = true;
-                objects[i].lockScalingY = true;
-                objects[i].lockSkewingX = true;
-                objects[i].lockSkewingY = true;
-                objects[i].lockUniScaling = true;
-            }
             this.clearAnnotationSelection(true);
+            this.removeHighlight();
+            this.requestBoardSave();
         }
+
+        for (let i = 0; i < objects.length; i++) {
+            this._applyAnnotationVisibilityState(objects[i]);
+        }
+
+        if (on && this._cachedTargetCanvasSelection) {
+            const selection = this._cachedTargetCanvasSelection.filter(obj => obj?.visible);
+            if (selection.length > 1) {
+                selection.forEach(obj => this.selectAnnotation(obj, true));
+            } else if (selection.length === 1) {
+                this.selectAnnotation(selection[0], true);
+            }
+        }
+
+        this.raiseEvent('annotations-visibility-changed', {
+            visible: !!on
+        });
         this.canvas.requestRenderAll();
     }
 
@@ -716,11 +701,9 @@ OSDAnnotations.FabricWrapper = class extends XOpatViewerSingleton {
     /**
      * Add an annotation to a layer.
      * If layerID is missing, adds to the active layer; no-op if no active layer found.
-     * @param {fabric.Object} annotation
-     * @param {number} [index] insert position; appends by default
-     * @returns {void}
+     * @private
      */
-    addAnnotationToLayer(annotation, index = undefined) {
+    _addAnnotationToLayer(annotation, index = undefined) {
         const hasExplicitLayer =
             annotation &&
             annotation.layerID !== undefined &&
@@ -803,7 +786,7 @@ OSDAnnotations.FabricWrapper = class extends XOpatViewerSingleton {
                 const layer = this.getLayer(obj.layerID);
                 obj._position = layer ? layer.getAnnotationIndex(obj) : undefined;
             } else {
-                obj._position = this.getRootAnnotationIndex(obj);
+                obj._position = this.getBoardItemIndex('annotation', obj.incrementId);
             }
         }
         targetAnnots.sort((a, b) => (a._position ?? 0) - (b._position ?? 0));
@@ -947,6 +930,111 @@ OSDAnnotations.FabricWrapper = class extends XOpatViewerSingleton {
         );
     }
 
+    _applyAnnotationVisibilityState(object) {
+        if (!object || object.isHighlight) return;
+
+        const annotationsEnabled = !this.module.disabledInteraction;
+        const layer = object.layerID ? this.getLayer(String(object.layerID)) : null;
+        const shouldShow = annotationsEnabled && (!layer || layer.visible !== false);
+
+        object.visible = !!shouldShow;
+        object.evented = !!shouldShow;
+        object.selectable = !!shouldShow;
+
+        if (shouldShow) {
+            object.lockMovementX = false;
+            object.lockMovementY = false;
+            object.lockRotation = false;
+            object.lockScalingFlip = false;
+            object.lockScalingX = false;
+            object.lockScalingY = false;
+            object.lockSkewingX = false;
+            object.lockSkewingY = false;
+            object.lockUniScaling = false;
+        } else {
+            object.lockMovementX = true;
+            object.lockMovementY = true;
+            object.lockRotation = true;
+            object.lockScalingFlip = true;
+            object.lockScalingX = true;
+            object.lockScalingY = true;
+            object.lockSkewingX = true;
+            object.lockSkewingY = true;
+            object.lockUniScaling = true;
+        }
+    }
+
+    _setLayerVisibility(layerOrId, visible, _raise = true) {
+        const layer = (typeof layerOrId === 'object' && layerOrId)
+            ? layerOrId
+            : (this._layers[String(layerOrId)] ?? this._layers[layerOrId]);
+
+        if (!layer) return false;
+
+        const nextVisible = !!visible;
+        if (layer.visible === nextVisible) return false;
+
+        const affectedObjects = layer.getObjects?.() || [];
+
+        if (!nextVisible) {
+            const selected = this.getSelectedAnnotations?.() || [];
+            for (const obj of affectedObjects) {
+                if (selected.some(sel => sel.internalID === obj.internalID)) {
+                    this.deselectAnnotation(obj, true);
+                }
+            }
+
+            if (this._layer && String(this._layer.id) === String(layer.id)) {
+                this.unsetActiveLayer();
+            }
+            if (this._selectedLayers.has(layer.id)) {
+                this.deselectLayer(layer, true);
+            }
+            if (affectedObjects.some(obj => this.isOngoingEditOf?.(obj))) {
+                this.requestBoardSave();
+            }
+        }
+
+        layer.setVisibility(nextVisible);
+
+        for (const obj of affectedObjects) {
+            this._applyAnnotationVisibilityState(obj);
+        }
+
+        this.canvas.requestRenderAll();
+
+        if (_raise) {
+            this.raiseEvent('layer-visibility-changed', {
+                layer,
+                visible: nextVisible
+            });
+            this.raiseEvent('layer-objects-changed', {
+                layerId: String(layer.id)
+            });
+        }
+        return true;
+    }
+
+    setLayerVisibility(layerOrId, visible, _raise = true) {
+        return this._setLayerVisibility(layerOrId, visible, _raise);
+    }
+
+    toggleLayerVisibility(layerOrId, _raise = true) {
+        const layer = (typeof layerOrId === 'object' && layerOrId)
+            ? layerOrId
+            : (this._layers[String(layerOrId)] ?? this._layers[layerOrId]);
+
+        if (!layer) return false;
+
+        const before = !!layer.visible;
+        const after = !before;
+
+        return this.module.history.push(
+            () => this._setLayerVisibility(layer, after, _raise),
+            () => this._setLayerVisibility(layer, before, _raise)
+        );
+    }
+
     _deleteAnnotation (annotation, _raise = true){
         let cancelFlag = false;
         try {
@@ -991,7 +1079,7 @@ OSDAnnotations.FabricWrapper = class extends XOpatViewerSingleton {
         const boardIndex = annotation.hasOwnProperty("_position") && !annotation.layerID ? annotation._position : undefined;
 
         this.updateSingleAnnotationVisuals(annotation);
-        this.addAnnotationToLayer(annotation, layerIndex);
+        this._addAnnotationToLayer(annotation, layerIndex);
 
         if (!_dangerousSkipHistory && !annotation.layerID) {
             this.upsertBoardItem('annotation', annotation.incrementId, boardIndex);
@@ -1027,7 +1115,7 @@ OSDAnnotations.FabricWrapper = class extends XOpatViewerSingleton {
 
             this.removeAnnotationFromLayer(previous);
             next.layerID = layerId;
-            this.addAnnotationToLayer(next, layerIndex);
+            this._addAnnotationToLayer(next, layerIndex);
         } else {
             next.layerID = undefined;
             boardIndex = this.getBoardItemIndex('annotation', previous.incrementId);
@@ -1090,6 +1178,7 @@ OSDAnnotations.FabricWrapper = class extends XOpatViewerSingleton {
     setAnnotationPrivate(annotation, value) {
         if (annotation.private === value) return;
         annotation.private = value;
+        this.canvas.requestRenderAll();
         this.raiseEvent('annotation-set-private', {object: annotation});
     }
 
@@ -1101,6 +1190,7 @@ OSDAnnotations.FabricWrapper = class extends XOpatViewerSingleton {
     addComment(annotation, comment) {
         if (!annotation.comments) annotation.comments = [];
         annotation.comments.push(comment);
+        this.canvas.requestRenderAll();
         this.raiseEvent('annotation-add-comment', {object: annotation, comment});
     }
 
@@ -1114,8 +1204,8 @@ OSDAnnotations.FabricWrapper = class extends XOpatViewerSingleton {
         if (!annotation.comments) return false;
         const found = annotation.comments.findIndex(c => c.id === commentId);
         if (found === -1) return false;
-        // annotation.comments.splice(found, 1);
         annotation.comments[found].removed = true;
+        this.canvas.requestRenderAll();
         this.raiseEvent('annotation-delete-comment', {object: annotation, commentId});
         return true;
     }
@@ -1744,6 +1834,16 @@ OSDAnnotations.FabricWrapper = class extends XOpatViewerSingleton {
         //prevents event bubling if the up event was handled by annotations
         function handleRightClickUp(event, fabricEvent) {
             if (_this.module.disabledInteraction) return;
+
+            if (_this._controlInteractionActive || _this._isFabricControlInteraction(fabricEvent)) {
+                _this._controlInteractionActive = false;
+                _this.module.cursor.isDown = false;
+                _this.module.cursor.mouseTime = Infinity;
+                event.preventDefault?.();
+                event.stopPropagation?.();
+                return;
+            }
+
             if (!_this.module.cursor.isDown) {
                 //todo in auto mode, this event is fired twice!! fix
                 if (_this.module.cursor.mouseTime === Infinity) {
@@ -1774,6 +1874,11 @@ OSDAnnotations.FabricWrapper = class extends XOpatViewerSingleton {
         function handleRightClickDown(event, fabricEvent) {
             if (_this.module.cursor.isDown || _this.module.disabledInteraction) return;
 
+            if (_this._isFabricControlInteraction(fabricEvent)) {
+                _this._abortForControlInteraction(event, true);
+                return;
+            }
+
             _this.module.cursor.mouseTime = Date.now();
 
             let factory = _this.module.presets.right ? _this.module.presets.right.objectFactory : undefined;
@@ -1785,6 +1890,15 @@ OSDAnnotations.FabricWrapper = class extends XOpatViewerSingleton {
 
         function handleLeftClickUp(event, fabricEvent) {
             if (_this.module.disabledInteraction) return;
+
+            if (_this._controlInteractionActive || _this._isFabricControlInteraction(fabricEvent)) {
+                _this._controlInteractionActive = false;
+                _this.module.cursor.isDown = false;
+                _this.module.cursor.mouseTime = Infinity;
+                event.preventDefault?.();
+                event.stopPropagation?.();
+                return;
+            }
 
             if (!_this.module.cursor.isDown) {
                 //todo in auto mode, this event is fired twice!! fix
@@ -1821,7 +1935,10 @@ OSDAnnotations.FabricWrapper = class extends XOpatViewerSingleton {
         function handleLeftClickDown(event, fabricEvent) {
             if (_this.module.cursor.isDown || _this.module.disabledInteraction) return;
 
-            _this.module.cursor.mouseTime = Date.now();
+            if (_this._isFabricControlInteraction(fabricEvent)) {
+                _this._abortForControlInteraction(event, true);
+                return;
+            }
 
             let factory = _this.module.presets.left ? _this.module.presets.left.objectFactory : undefined;
             if (!factory) {
@@ -2016,7 +2133,6 @@ OSDAnnotations.FabricWrapper = class extends XOpatViewerSingleton {
                 if (this.module.isMouseOSDInteractive()) {
                     // todo this should be hidden in factory api
                     clickedObject.set({
-                        hasControls: false,
                         lockMovementX: true,
                         lockMovementY: true
                     });
@@ -2153,7 +2269,7 @@ OSDAnnotations.FabricWrapper = class extends XOpatViewerSingleton {
                     obj.layerID = layerId;
 
                     const layerIndex = obj.hasOwnProperty('_position') ? obj._position : undefined;
-                    self.addAnnotationToLayer(obj, layerIndex);
+                    self._addAnnotationToLayer(obj, layerIndex);
                     touchedLayers.add(layerId);
                 } else {
                     obj.layerID = undefined;
@@ -2204,6 +2320,28 @@ OSDAnnotations.FabricWrapper = class extends XOpatViewerSingleton {
             console.log("DISCARD", e, self.canvas.__eventListeners);
             return disc(e, t);
         };
+    }
+
+    _isFabricControlInteraction(fabricEvent) {
+        const target = fabricEvent?.target;
+        if (!target) return false;
+
+        const corner =
+            fabricEvent?.transform?.corner ||
+            target.__corner ||
+            fabricEvent?.corner;
+
+        return !!corner;
+    }
+
+    _abortForControlInteraction(event, isLeftClick) {
+        this.module.cursor.abortedTime = Date.now();
+        this.module.cursor.mouseTime = Infinity;
+        this.module.cursor.isDown = false;
+        this._controlInteractionActive = true;
+
+        if (event?.preventDefault) event.preventDefault();
+        if (event?.stopPropagation) event.stopPropagation();
     }
 
     setCloseEdgeMouseNavigation(enable) {
