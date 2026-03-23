@@ -1,225 +1,166 @@
-# Events in OSD Annotations
+# Events
 
-Some events are fired on the global instance of OSD Annotations. Some events are
-fired on particular annotation context - depends on the particular viewer the annotations are on.
+`OSDAnnotations` emits a small set of module-level events.
+Per-viewer annotation events are emitted on `OSDAnnotations.FabricWrapper`.
 
-For global events, it is enough to say ``OSDAnnotations.addHandler(...)``. For contextual events,
- TODO api not finished.
+To listen to viewer-scoped events from the global module, use:
 
-## Global Events
+    OSDAnnotations.instance().addFabricHandler(eventName, handler)
 
-##### factory-registered | e: `{factory: OSDAnnotations.AnnotationObjectFactory}`
+## Global events (`OSDAnnotations`)
 
-##### osd-interactivity-toggle
+##### `factory-registered` | `{ factory: OSDAnnotations.AnnotationObjectFactory }`
+Raised when a factory is registered at runtime.
 
-##### enabled | ``{isEnabled: boolean}``
+##### `osd-interactivity-toggle`
+No payload.
 
-##### layer-added 
+##### `enabled` | `{ isEnabled: boolean }`
+Raised when annotation mode is enabled or disabled.
 
-##### layer-removed
+##### `annotation-board-save-request` | `{ viewer?: OpenSeadragon.Viewer }`
+Raised when annotation board state should be persisted.
+When emitted from a specific `FabricWrapper`, the payload contains `{ viewer }`.
+When emitted from module-level keyboard handling, the payload may be omitted.
 
-##### annotation-create | ``{object: fabric.Object}``
-Fires when annotation object is created. This does not apply when
-``annotation-replace`` is called - in that case, the replacement is
-considered as the creation.
+##### `author-annotation-styling-toggle` | `{ enable: boolean }`
+Raised when per-author styling is enabled or disabled.
 
-##### annotation-before-create | ``{object: fabric.Object, isCancelled: () => boolean, setCancelled: (cancelled: boolean) => void}``
-This event is fired prior to inserting any annotation, including promotion (simple helper annotation creation is not affected).
-`isCancelled` can be called to check if the deletion was already requested to be cancelled (by another plugin/module for example)
-`setCancelled` can be used to request to cancel the deletion
+##### `free-form-tool-mode-add` | `{ isModeAdd: boolean }`
+Raised when the free-form tool switches between add and subtract mode.
 
-##### annotation-delete | ``{object: fabric.Object}``
+##### `free-form-tool-radius` | `{ radius: number }`
+Raised when the free-form brush radius changes.
 
-##### annotation-before-delete | ``{object: fabric.Object, isCancelled: () => boolean, setCancelled: (cancelled: boolean) => void}``
-This event is fired prior to deleting any annotation.
-`isCancelled` can be called to check if the deletion was already requested to be cancelled (by another plugin/module for example)
-`setCancelled` can be used to request to cancel the deletion
+##### `comments-control-clicked`
+No payload.
+Raised when the comments control on an annotation is clicked.
 
-##### annotation-replace | ``{previous: fabric.Object, next: fabric.Object}``
-This event is fired when annotation is replaced, e.g. free-form-tool edit. Such edits
-in fact replace annotation with a new one, although the annotation identity as perceived
-by the user remains the same. This event is called only once per update, 
-at the end.
+##### `save-annotations` | `{ setHandled: (message: string) => void, stopPropagation: () => string | undefined }`
+This event is requested by calling `requestExport()`.
 
-##### annotation-before-replace | ``{object: fabric.Object, isCancelled: () => boolean, setCancelled: (cancelled: boolean) => void}``
-This event is fired prior to replacing annotation. Same usage as `annotation-before-delete`
+A handler that performs the export should call:
 
-##### annotation-replace-doppelganger | ``{previous: fabric.Object, next: fabric.Object}``
-This event is fired when annotations are replaced, but only temporarily (e.g. via free form tool).
-It can be called several times during one edit action.
+    e.setHandled("your message")
 
-##### annotation-before-replace-doppelganger | ``{object: fabric.Object, isCancelled: () => boolean, setCancelled: (cancelled: boolean) => void}``
-This event is fired prior to replacing doppelganger annotation. Same usage as `annotation-before-delete`
+to mark the request as handled.
 
-##### annotation-edit | ``{object: fabric.Object}``
-This event is fired when user performs direct annotation editing.
+##### `preset-create` | `{ preset: OSDAnnotations.Preset }`
 
-##### annotation-before-edit | ``{object: fabric.Object, isCancelled: () => boolean, setCancelled: (cancelled: boolean) => void}``
-This event is fired prior to editing annotation. Same usage as `annotation-before-delete`
+##### `preset-delete` | `{ preset: OSDAnnotations.Preset }`
 
-##### annotation-selected | ``{object: fabric.Object}``
-This event is fired when user selects an annotation.
+##### `preset-update` | `{ preset: OSDAnnotations.Preset }`
 
-##### annotation-deselected | ``{object: fabric.Object}``
-This event is fired when user deselects an annotation.
+##### `preset-select` | `{ preset: OSDAnnotations.Preset | undefined, isLeftClick: boolean }`
 
-##### annotation-set-private | ``{object: fabric.Object}``
-This event is fired when the `private` property of an annotation changes.
+##### `preset-meta-add` | `{ preset: OSDAnnotations.Preset, key: string }`
 
-##### annotation-add-comment | ``{object: fabric.Object, comment: AnnotationComment}``
-This event is fired when a comment is added, one by one.
-```ts
-type AnnotationComment = {
-  id: string;
-  author: {
-    id: string;
-    name: string;
-  };
-  reference: string;
-  content: string;
-  replyTo?: string;
-  createdAt: number;
-  modifiedAt: number;
-  removed?: boolean;
-}
-```
+##### `preset-meta-remove` | `{ preset: OSDAnnotations.Preset, key: string }`
 
-##### annotation-delete-comment | ``{object: fabric.Object, comment: AnnotationComment}``
-This event is fired when a comment is deleted, one by one.
-See `annotation-add-comment` for `AnnotationComment` definition.
+##### `import` | `{ owner: OSDAnnotations.FabricWrapper, options: object, clear: boolean, data: object | object[] | null }`
+Raised after import completes or import input is rejected.
+`data` is `null` when nothing was imported.
 
-##### annotation-updated-comment | ``{object: fabric.Object, commentId: string, newComment: AnnotationComment | null}``
-This event is fired when comment data gets updated and is expected to re-render. `newComment` will be `null` if the comment was deleted.
-See `annotation-add-comment` for `AnnotationComment` definition.
+##### `export-partial` | `{ options: object, data: object, owner: OSDAnnotations.FabricWrapper }`
 
-##### comments-control-clicked
-This event is fired when user clicks the control for comments
+##### `export` | `{ data: string, owner: OSDAnnotations.FabricWrapper }`
 
-##### author-annotation-styling-toggle | ``{enable: boolean}``
-This event is fired when preference for per-author property styling changes
+##### `mode-changed` | `{ mode: OSDAnnotations.AnnotationState }`
 
-#### save-annotations | ``{setHandled(string)}``
-This event is not fired by default, but others can request it by calling ``requestExport();``.
-Once the event is handled, the handler should call ``e.setHandled(<message>)`` to stop saving the annotations 
-multiple times. Winner of the saving process is decided by annotation handler priority.
+---
 
-##### preset-delete | ``{preset: OSDAnnotations.Preset}``
+## Viewer events (`OSDAnnotations.FabricWrapper`)
+The viewer-scoped events are emitted on contextualized instance of particular
+canvas that belongs to a specific viewer.
 
-##### preset-create | ``{preset: OSDAnnotations.Preset}``
+##### `annotation-board-refresh-request` | `{ viewer: OpenSeadragon.Viewer, clear: boolean, reason: 'import' | 'load-objects' }`
+Raised when the annotation board should refresh after objects are imported or loaded.
 
-##### preset-update | ``{preset: OSDAnnotations.Preset}``
+##### `annotation-board-save-request` | `{ viewer: OpenSeadragon.Viewer }`
 
-##### preset-select | ``{preset: OSDAnnotations.Preset, isLeftClick:boolean}``
+##### `active-layer-changed` | `{ layer: OSDAnnotations.Layer | undefined }`
 
-##### preset-meta-remove | ``{preset: OSDAnnotations.Preset, key: string}``
+##### `layer-selection-changed` | `{ selected: OSDAnnotations.Layer[], deselected: OSDAnnotations.Layer[] }`
 
-##### preset-meta-add | ``{preset: OSDAnnotations.Preset, key: string}``
+##### `layer-added` | `{ layer: OSDAnnotations.Layer }`
 
-##### annotation-preset-change | ``{object: fabric.Object, presetID: string, oldPresetID: string}``
+##### `layer-removed` | `{ layer: OSDAnnotations.Layer }`
 
-##### annotation-before-preset-change
-This event is fired prior to changing annotation preset. Same usage as `annotation-before-delete`
+##### `layer-objects-changed` | `{ layerId: string }`
+Raised after loading/import changes the object set of a layer.
 
-##### history-select | ``{incrementId: number, originalEvent: MouseEvent}``
+##### `annotation-selection-changed` | `{ selected: fabric.Object[], deselected: fabric.Object[], fromCanvas: boolean }`
 
-##### import | ``{options: object, clear: boolean, data: object, owner: FabricWrapper}``
+##### `annotation-before-create` | `{ object: fabric.Object, isCancelled: () => boolean, setCancelled: (cancelled: boolean) => void }`
+Cancelable event raised before promoting/inserting an annotation.
 
-##### export-partial | ``{options: object, data: object, owner: FabricWrapper}``
+##### `annotation-create` | `{ object: fabric.Object }`
 
-##### export | ``{data: string, owner: FabricWrapper}``
+##### `annotation-before-delete` | `{ object: fabric.Object, isCancelled: () => boolean, setCancelled: (cancelled: boolean) => void }`
+Cancelable event raised before deleting an annotation.
 
-#### mode-changed | ``{mode: OSDAnnotatinos.AnnotationState}``
+##### `annotation-delete` | `{ object: fabric.Object }`
 
-##### history-open | ``{inNewWindow: boolean, containerId: null|string}``
-If history is opened in detached (new) window, the contained ID is null:
-the DOM does not belong to this context. The container
+##### `annotation-before-replace` | `{ object: fabric.Object, isCancelled: () => boolean, setCancelled: (cancelled: boolean) => void }`
+Cancelable event raised before replacing one full annotation with another.
 
-##### history-swap | ``{inNewWindow: boolean}``
+##### `annotation-replace` | `{ previous: fabric.Object, next: fabric.Object, boardIndex: number | undefined }`
+Raised after a full annotation replacement finishes.
 
-##### history-close | ``{inNewWindow: boolean}``
+##### `annotation-before-replace-doppelganger` | `{ object: fabric.Object, isCancelled: () => boolean, setCancelled: (cancelled: boolean) => void }`
+Cancelable event raised before a temporary doppelganger swap.
 
-##### canvas-nonprimary-release-not-handled
-Called when the annotation modes did not handle mouse release action.
+##### `annotation-replace-doppelganger` | `{ previous: fabric.Object, next: fabric.Object }`
+Raised for temporary swaps used during interactive editing such as free-form editing.
 
-##### canvas-release-not-handled
-Called when the annotation modes did not handle mouse release action.
 
-#### canvas-release | ``{originalEvent: Event, pressTime: number}``
-TODO do we want to keep this?
+##### `annotation-before-preset-change` | `{ object: fabric.Object, isCancelled: () => boolean, setCancelled: (cancelled: boolean) => void }`
+Cancelable event raised before changing an annotation preset.
 
-Fires ``warn-user``, ``error-user`` and `warn-system` on the viewer instance.
+##### `annotation-preset-change` | `{ object: fabric.Object, presetID: string, oldPresetID: string }`
 
-## Viewer Contextual Events - ``FabricProxy``
+##### `annotation-set-private` | `{ object: fabric.Object }`
 
-#### active-layer-changed | ``{id: string}``
+##### `annotation-add-comment` | `{ object: fabric.Object, comment: AnnotationComment }`
 
-#### layer-selection-changed | ``{ids: string[], isSelected: boolean}``
+##### `annotation-delete-comment` | `{ object: fabric.Object, commentId: string }`
 
-##### layer-added | ``{layer: OSDAnnotations.AnnotationLayer}``
+##### `visual-property-changed` | `{ visuals: OSDAnnotations.CommonAnnotationVisuals }`
 
-##### layer-removed | ``{layer: OSDAnnotations.AnnotationLayer}``
 
-##### annotation-selection-changed | ``{ids: string[], isSelected: boolean, fromCanvas: boolean}``
+##### `nonprimary-release-not-handled` | `{ originalEvent: Event, pressTime: number }`
+Raised when the current mode does not handle a non-primary button release.
 
-##### annotation-create | ``{object: fabric.Object}``
-Fires when annotation object is created. This does not apply when
-``annotation-replace`` is called - in that case, the replacement is
-considered as the creation.
+##### `canvas-release` | `{ originalEvent: Event, pressTime: number }`
+Raised when the current mode does not handle a primary-button release.
 
-##### annotation-before-create | ``{object: fabric.Object, isCancelled: () => boolean, setCancelled: (cancelled: boolean) => void}``
-This event is fired prior to inserting any annotation, including promotion (simple helper annotation creation is not affected).
-`isCancelled` can be called to check if the deletion was already requested to be cancelled (by another plugin/module for example)
-`setCancelled` can be used to request to cancel the deletion
+---
 
-##### annotation-delete | ``{object: fabric.Object}``
+### `AnnotationComment`
 
-##### annotation-before-delete | ``{object: fabric.Object, isCancelled: () => boolean, setCancelled: (cancelled: boolean) => void}``
-This event is fired prior to deleting any annotation.
-`isCancelled` can be called to check if the deletion was already requested to be cancelled (by another plugin/module for example)
-`setCancelled` can be used to request to cancel the deletion
+    type AnnotationComment = {
+      id: string;
+      author: {
+        id: string;
+        name: string;
+      };
+      reference: string;
+      content: string;
+      replyTo?: string;
+      createdAt: number;
+      modifiedAt: number;
+      removed?: boolean;
+    }
 
-##### annotation-replace | ``{previous: fabric.Object, next: fabric.Object}``
-This event is fired when annotation is replaced, e.g. free-form-tool edit. Such edits
-in fact replace annotation with a new one, although the annotation identity as perceived
-by the user remains the same. This event is called only once per update,
-at the end.
+---
 
-##### annotation-before-replace | ``{object: fabric.Object, isCancelled: () => boolean, setCancelled: (cancelled: boolean) => void}``
-This event is fired prior to replacing annotation. Same usage as `annotation-before-delete`
+### Notes (v2 -> v3)
 
-##### annotation-replace-doppelganger | ``{previous: fabric.Object, next: fabric.Object}``
-This event is fired when annotations are replaced, but only temporarily (e.g. via free form tool).
-It can be called several times during one edit action.
-
-##### annotation-before-replace-doppelganger | ``{object: fabric.Object, isCancelled: () => boolean, setCancelled: (cancelled: boolean) => void}``
-This event is fired prior to replacing doppelganger annotation. Same usage as `annotation-before-delete`
-
-##### annotation-edit | ``{object: fabric.Object}``
-This event is fired when user performs direct annotation editing.
-
-##### annotation-before-edit | ``{object: fabric.Object, isCancelled: () => boolean, setCancelled: (cancelled: boolean) => void}``
-This event is fired prior to editing annotation. Same usage as `annotation-before-delete`
-
-##### annotation-set-private | ``{object: fabric.Object}``
-This event is fired when the `private` property of an annotation changes.
-
-##### annotation-add-comment | ``{object: fabric.Object, comment: AnnotationComment}``
-This event is fired when a comment is added, one by one.
-```ts
-type AnnotationComment = {
-  id: string;
-  author: {
-    id: string;
-    name: string;
-  };
-  content: string;
-  createdAt: Date;
-  removed?: boolean;
-}
-```
-
-##### annotation-delete-comment | ``{object: fabric.Object, commentId: string}``
-This event is fired when a comment is deleted, one by one.
-
-##### visual-property-changed | ``{[name]: any}``
-Common visual property changed.
+- `annotation-edit`, `annotation-before-edit`, and comment related events are not fired here, but fired ON the module class by the annotation plugin.
+    - TODO: consider moving these events to the module class via APIfied manner
+- `history-select`, `history-open`, `history-swap`, `history-close` events are not supported - rely on global app history events.
+- `canvas-nonprimary-release-not-handled` is replaced by `nonprimary-release-not-handled`, and `canvas-release-not-handled` not supported
+- `active-layer-changed` now returns the actual `layer` object, not `{ id }`.
+- `layer-selection-changed` now returns `{ selected, deselected }`, not `{ ids, isSelected }`.
+- `annotation-selection-changed` now returns `{ selected, deselected, fromCanvas }`, not `{ ids, isSelected, fromCanvas }`.
+- `annotation-delete-comment` currently emits `{ commentId }`, not the full comment object.
