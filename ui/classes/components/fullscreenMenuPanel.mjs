@@ -24,6 +24,9 @@ export class FullscreenMenuPanel extends MainPanel {
 
         super({
             ...normalizedOptions,
+            namespacedTabs: normalizedOptions.namespacedTabs !== false,
+            namespaces: normalizedOptions.namespaces || Menu.DEFAULT_NAMESPACES,
+            defaultNamespace: normalizedOptions.defaultNamespace || Menu.NAMESPACE.SYSTEM,
             orientation: Menu.ORIENTATION.LEFT,
             buttonSide: Menu.BUTTONSIDE.LEFT,
             rounded: Menu.ROUNDED.ENABLE,
@@ -45,6 +48,8 @@ export class FullscreenMenuPanel extends MainPanel {
         this.defaultRounded = defaultRounded;
         this.headerTopPaddingClass = normalizedOptions.headerTopPaddingClass || "pt-3";
         this.closeButtonSide = normalizedOptions.closeButtonSide || Modal.CLOSE_BUTTON_SIDE.LEFT;
+        this.namespaceLabelClass = normalizedOptions.namespaceLabelClass || `px-3 text-xs font-semibold uppercase tracking-[0.16em] text-base-content/50 ${this.headerTopPaddingClass}`;
+        this.namespaceSeparatorClass = normalizedOptions.namespaceSeparatorClass || "my-2 border-t border-base-300/70";
 
         this.bodyRoot = div({
             class: `${this.heightClass} min-h-0 w-full min-w-0 bg-base-200`
@@ -79,6 +84,7 @@ export class FullscreenMenuPanel extends MainPanel {
         const root = this.modal.create();
         this._decorateModal(root);
         this._applyMenuDefaults();
+        this._renderNamespacedHeader(root);
         this._created = true;
         return root;
     }
@@ -94,6 +100,82 @@ export class FullscreenMenuPanel extends MainPanel {
         if (body) {
             body.classList.add("overflow-hidden", "bg-transparent", "p-0", "rounded-none");
         }
+    }
+
+    _renderNamespacedHeader(root = undefined) {
+        if (!this.usesNamespacedTabs?.()) return;
+
+        const header = this._resolveHeaderElement(root);
+        if (!header) return;
+
+        const buttonNodes = this._collectHeaderButtonNodes(header);
+        if (!buttonNodes.length) return;
+
+        const buttonsByTabId = new Map(buttonNodes.map(node => [node.dataset.menuTabId, node]));
+        const orderedNamespaces = this.getNamespacesWithTabs?.() || [];
+        const nodes = [];
+        let firstNamespace = true;
+
+        for (const namespace of orderedNamespaces) {
+            const tabs = namespace.tabs?.filter(tab => buttonsByTabId.has(tab.id)) || [];
+            if (!tabs.length) continue;
+
+            if (!firstNamespace) {
+                const separator = document.createElement("div");
+                separator.className = this.namespaceSeparatorClass;
+                separator.dataset.menuNamespaceSeparator = namespace.id;
+                nodes.push(separator);
+            }
+
+            const label = document.createElement("div");
+            label.className = this.namespaceLabelClass;
+            label.dataset.menuNamespaceLabel = namespace.id;
+            label.textContent = namespace.title || namespace.label || namespace.id;
+            nodes.push(label);
+
+            for (const tab of tabs) {
+                const buttonNode = buttonsByTabId.get(tab.id);
+                if (buttonNode) {
+                    nodes.push(buttonNode);
+                }
+            }
+
+            firstNamespace = false;
+        }
+
+        if (nodes.length) {
+            header.replaceChildren(...nodes);
+        }
+
+        this._syncHeaderButtonOrientation();
+    }
+
+    _resolveHeaderElement(root = undefined) {
+        if (!this.header?.id) return null;
+        return root?.querySelector?.(`#${this.header.id}`) || document.getElementById(this.header.id);
+    }
+
+    _collectHeaderButtonNodes(header) {
+        const tabOrder = Object.values(this.tabs).filter(tab => tab?.headerButton);
+        const taggedButtons = Array.from(header.querySelectorAll?.("[data-menu-tab-id]") || []);
+        const taggedIds = new Set(taggedButtons.map(node => node.dataset.menuTabId).filter(Boolean));
+        const remainingTabs = tabOrder.filter(tab => !taggedIds.has(tab.id));
+        let remainingIndex = 0;
+
+        for (const child of Array.from(header.children)) {
+            if (child.dataset?.menuNamespaceLabel || child.dataset?.menuNamespaceSeparator) {
+                continue;
+            }
+            if (child.dataset?.menuTabId) {
+                continue;
+            }
+
+            const tab = remainingTabs[remainingIndex++];
+            if (!tab) continue;
+            child.dataset.menuTabId = tab.id;
+        }
+
+        return Array.from(header.querySelectorAll?.("[data-menu-tab-id]") || []);
     }
 
     _applyMenuDefaults() {
@@ -124,6 +206,7 @@ export class FullscreenMenuPanel extends MainPanel {
 
     addTab(item, componentId = undefined) {
         const normalized = {
+            namespace: item.namespace || this.defaultNamespace || Menu.NAMESPACE.SYSTEM,
             ...item,
             class: item.class && item.class !== Menu ? item.class : undefined,
         };
@@ -135,6 +218,9 @@ export class FullscreenMenuPanel extends MainPanel {
         const tab = super.addTab(normalized, componentId);
         tab.close?.();
         this._syncHeaderButtonOrientation();
+        if (this._mountedMenu) {
+            this._renderNamespacedHeader();
+        }
 
         if (!this._focused) {
             this._ensureSingleOpen(normalized.id);
@@ -144,6 +230,9 @@ export class FullscreenMenuPanel extends MainPanel {
 
     deleteTab(id) {
         super.deleteTab(id);
+        if (this._mountedMenu) {
+            this._renderNamespacedHeader();
+        }
         return this;
     }
 

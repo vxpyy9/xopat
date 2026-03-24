@@ -1,4 +1,3 @@
-import { createCommentsWindow, finalizeCommentsWindowMount } from '../comments/commentsWindow.mjs';
 import { AnnotationBoardPanel } from '../board/annotationBoardPanel.mjs';
 
 const { div, button, input, span, h3 } = globalThis.van.tags;
@@ -57,53 +56,7 @@ export const viewerMenuMethods = {
         });
     },
 
-    initHTML() {
-        USER_INTERFACE.addHtml(createCommentsWindow(this), this.id);
-        finalizeCommentsWindowMount(this);
-
-        this.context.addHandler('enabled', () => {
-            this._updateViewerControls();
-            this._refreshAllBoardPanels();
-        });
-
-        this.context.addHandler('annotation-board-save-request', (e) => {
-            const viewerId = e?.viewer ? this._resolveViewerId(e.viewer) : undefined;
-            if (viewerId) {
-                this._getViewerUI(viewerId)?.boardPanel?.commitEdit();
-            } else {
-                VIEWER_MANAGER.viewers.forEach(viewer => this._getViewerUI(viewer.uniqueId)?.boardPanel?.commitEdit());
-            }
-        });
-
-        this.context.addHandler('annotation-board-refresh-request', (e) => {
-            const viewerId = e?.viewer ? this._resolveViewerId(e.viewer) : undefined;
-            if (viewerId) {
-                this._getViewerUI(viewerId)?.boardPanel?.requestRender();
-            } else {
-                this._refreshAllBoardPanels();
-            }
-        });
-
-        const globalSideRefresh = () => {
-            this._refreshAllBoardPanels();
-            this._refreshAllPresetLists();
-            this._refreshAllAuthorLists();
-        };
-
-        this.context.addHandler('annotation-preset-change', globalSideRefresh);
-        this.context.addHandler('import', globalSideRefresh);
-
-        this.context.addHandler('save-annotations', async (e) => {
-            await this.exportToFile();
-            e.setHandled(this.t('annotations.export.downloadFallbackHandled'));
-        }, null, -Infinity);
-
-        VIEWER_MANAGER.addHandler('viewer-destroy', (e) => {
-            this._unbindViewerFabricEvents(e.uniqueId);
-            const state = this._getViewerUI(e.uniqueId);
-            state?.boardPanel?.destroy?.();
-        });
-
+    initViewerMenu() {
         this.registerViewerMenu((viewer) => {
             const viewerId = viewer.uniqueId;
             const state = this.getViewerContext(viewerId);
@@ -189,7 +142,6 @@ export const viewerMenuMethods = {
                     div({ class: 'flex flex-col gap-1' },
                         div({ class: 'flex justify-between items-center px-1' },
                             span({ class: 'text-[10px] uppercase font-bold opacity-50' }, this.t('annotations.viewerMenu.border')),
-                            // Optional: Dynamic value display
                             span({ class: 'text-[10px] font-mono' }, state.borderInput.value)
                         ),
                         state.borderInput
@@ -226,182 +178,6 @@ export const viewerMenuMethods = {
                 body
             };
         });
-        setTimeout(() => {
-            const ui = window.UI;
-            const modes = this.context.Modes;
-
-            const gHistory = new ui.ToolbarGroup({ id: 'g-history' },
-                new ui.ToolbarItem({
-                    id: 'toolbar-history-undo',
-                    icon: 'fa-rotate-left',
-                    label: this.t('annotations.toolbar.undo'),
-                    onClick: () => this.context.undo()
-                }),
-                new ui.ToolbarItem({
-                    id: 'toolbar-history-redo',
-                    icon: 'fa-rotate-right',
-                    label: this.t('annotations.toolbar.redo'),
-                    onClick: () => this.context.redo()
-                }),
-                new ui.ToolbarItem({
-                    id: 'toolbar-history-board',
-                    icon: 'fa-list',
-                    label: this.t('annotations.toolbar.history'),
-                    onClick: () => this.switchMenuList('annot')
-                }),
-                new ui.ToolbarItem({
-                    id: 'toolbar-history-metrics',
-                    icon: 'fa-square-poll-horizontal',
-                    label: this.t('annotations.toolbar.measurements'),
-                    onClick: () => this.showMeasurementsWindow()
-                })
-            );
-
-            const factories = this._allowedFactories
-                .map((factoryId) => this.context.getAnnotationObjectFactory(factoryId))
-                .filter(Boolean);
-
-            const gModes = new ui.ToolbarGroup({
-                itemID: 'g-modes',
-                selectable: true,
-                defaultSelected: modes.AUTO.getId(),
-                extraClasses: { padding: 'mx-2' }
-            });
-
-            new ui.ToolbarItem({
-                itemID: modes.AUTO.getId(),
-                icon: modes.AUTO.getIcon(),
-                label: modes.AUTO.getDescription(),
-                onClick: () => {
-                    this.switchModeActive(modes.AUTO.getId());
-                }
-            }).attachTo(gModes);
-
-            this._shapeChoice = new ui.ToolbarChoiceGroup({
-                headerMode: 'selectOrExpand',
-                itemID: 'cg-shapes',
-                defaultSelected: factories[0]?.id || 'none',
-                onChange: (factoryId) => {
-                    this.switchModeActive(modes.CUSTOM.getId(), factoryId, true);
-                }
-            }, ...factories.map((factory) => new ui.ToolbarItem({
-                itemID: factory.factoryID,
-                icon: factory.getIcon(),
-                label: `${modes.CUSTOM.getDescription()}: ${factory.title()}`
-            }))).attachTo(gModes);
-
-            this._gBrush = new ui.ToolbarGroup({ id: 'g-brush', itemID: 'g-brush', selectable: true },
-                new ui.ToolbarItem({
-                    itemID: modes.FREE_FORM_TOOL_ADD.getId(),
-                    icon: modes.FREE_FORM_TOOL_ADD.getIcon(),
-                    label: modes.FREE_FORM_TOOL_ADD.getDescription(),
-                    onClick: () => {
-                        this.switchModeActive(modes.FREE_FORM_TOOL_ADD.getId());
-                    },
-                    extraClasses: { icon: 'thumb-add' }
-                }),
-                new ui.ToolbarItem({
-                    itemID: modes.FREE_FORM_TOOL_REMOVE.getId(),
-                    icon: modes.FREE_FORM_TOOL_REMOVE.getIcon(),
-                    label: modes.FREE_FORM_TOOL_REMOVE.getDescription(),
-                    onClick: () => {
-                        this.switchModeActive(modes.FREE_FORM_TOOL_REMOVE.getId());
-                    },
-                    extraClasses: { icon: 'thumb-remove' }
-                })
-            ).attachTo(gModes);
-
-            this._autoChoice = new ui.ToolbarChoiceGroup({
-                    itemID: 'cg-auto',
-                    defaultSelected: modes.MAGIC_WAND.getId(),
-                    onChange: (id) => {
-                        this.switchModeActive(id);
-                    }
-                },
-                new ui.ToolbarItem({
-                    itemID: modes.MAGIC_WAND.getId(),
-                    icon: modes.MAGIC_WAND.getIcon(),
-                    label: modes.MAGIC_WAND.getDescription()
-                }),
-                new ui.ToolbarItem({
-                    itemID: modes.FREE_FORM_TOOL_CORRECT.getId(),
-                    icon: modes.FREE_FORM_TOOL_CORRECT.getIcon(),
-                    label: modes.FREE_FORM_TOOL_CORRECT.getDescription()
-                }),
-                new ui.ToolbarItem({
-                    itemID: modes.VIEWPORT_SEGMENTATION.getId(),
-                    icon: modes.VIEWPORT_SEGMENTATION.getIcon(),
-                    label: modes.VIEWPORT_SEGMENTATION.getDescription()
-                })).attachTo(gModes);
-            this._gModes = gModes;
-
-            this._htmlWrap = new UI.RawHtml({
-                id: `${this.id}-mode-options-html`,
-                extraClasses: { base: 'w-full h-full text-sm' }
-            }, this.context.mode.customHtml() || '');
-
-            this._modeOptionsPanel = new UI.ToolbarPanelButton({
-                id: 'mode-options',
-                itemID: 'mode-options',
-                icon: 'fa-sliders',
-                label: this.t('annotations.toolbar.modeOptions'),
-                panelClass: 'w-80 max-h-[60vh] overflow-y-auto space-y-2',
-                onToggle: (open) => {
-                    if (!open) this._forceCloseModeOptions = true;
-                }
-            }, this._htmlWrap);
-
-            USER_INTERFACE.Tools.setMenu(this.id, 'annotations-tool-bar', this.t('annotations.toolbar.title'),
-                [gHistory, new UI.ToolbarSeparator(), gModes, new UI.ToolbarSeparator(), this._modeOptionsPanel],
-                'draw'
-            );
-        }, 2000);
-
-        USER_INTERFACE.AppBar.Plugins.setMenu(this.id, 'annotations-shared', this.t('annotations.export.menuTitle'),
-            `<h3 class="f2-light">${this.t('annotations.export.menuTitle')} <span class="text-small" id="gui-annotations-io-tissue-name">${this.t('annotations.export.forSlide', { slide: this.activeTissue })}</span></h3><br>
-<span class="text-small">${this.t('annotations.export.description')}</span>
-<div id="annotations-shared-head"></div><div id="available-annotations"></div>
-<br>
-<h4 class="f3-light header-sep">${this.t('annotations.export.fileSection')}</h4><br>
-<div>${this.exportOptions.availableFormats.map((o) => this.getIOFormatRadioButton(o)).join('')}</div>
-<div id="annotation-convertor-options"></div>
-<div id="export-annotations-scope" class="mt-2">
-  <span class="text-small mr-2">${this.t('annotations.export.scopeLabel')}</span>
-  ${['all', 'selected'].map((s) => this.getExportScopeRadioButton(s)).join('')}
-</div>
-<br>
-${UIComponents.Elements.checkBox({ label: this.t('annotations.export.replaceOnImport'), onchange: this.THIS + ".setOption('importReplace', !!this.checked)", default: this.getOption('importReplace', true) })}
-<br><br>
-<div id="annotations-local-export-panel">
-  <button id="importAnnotation" onclick="this.nextElementSibling.click();return false;" class="btn"></button>
-  <input type='file' style="visibility:hidden; width: 0; height: 0;" onchange="${this.THIS}.importFromFile(event);$(this).val('');" />
-  &emsp;&emsp;
-  <button id="downloadPreset" onclick="${this.THIS}.exportToFile(false, true);return false;" class="btn">${this.t('annotations.export.downloadPresets')}</button>&nbsp;
-  <button id="downloadAnnotation" onclick="${this.THIS}.exportToFile(true, true);return false;" class="btn">${this.t('annotations.export.downloadAnnotations')}</button>&nbsp;
-</div>
-<h4 class="f3-light header-sep">${this.t('annotations.comments.title')}</h4><br>
-${UIComponents.Elements.checkBox({ label: this.t('annotations.comments.enable'), onchange: this.THIS + '.enableComments(!!this.checked)', default: this._commentsEnabled })}
-${UIComponents.Elements.checkBox({ label: this.t('annotations.comments.autoOpen'), onchange: this.THIS + '.commentsDefaultOpen(!!this.checked)', default: this._commentsDefaultOpened })}
-<div class="flex gap-2 justify-between">
-  <span>${this.t('annotations.comments.rememberState')}</span>
-  ${UIComponents.Elements.select({
-                default: this._commentsClosedMethod,
-                options: {
-                    none: this.t('annotations.comments.rememberOptions.none'),
-                    global: this.t('annotations.comments.rememberOptions.global'),
-                    individual: this.t('annotations.comments.rememberOptions.individual')
-                },
-                changed: this.THIS + '.switchCommentsClosedMethod(value)'
-            })}
-</div>`);
-
-        this.updateSelectedFormat(this.exportOptions.format);
-        this.updatePresetsHTML();
-
-        this.context.addHandler('author-annotation-styling-toggle', (e) => this._toggleStrokeStyling(e.enable));
-        this.context.addHandler('comments-control-clicked', () => this.commentsToggleWindow());
-        this.context.addHandler('annotation-updated-comment', () => this._renderComments());
-        this._toggleStrokeStyling(this.context.strokeStyling);
     },
 
     _bindViewerFabricEvents(viewerOrId) {
@@ -432,7 +208,6 @@ ${UIComponents.Elements.checkBox({ label: this.t('annotations.comments.autoOpen'
                 panel._updateDeleteSelectionHeaderButton?.();
             }
         };
-
 
         const layerSelectionChanged = (e) => {
             const panel = this._getViewerUI(viewerId)?.boardPanel;
@@ -594,7 +369,6 @@ ${UIComponents.Elements.checkBox({ label: this.t('annotations.comments.autoOpen'
         const state = this._getViewerUI(viewerOrId);
         if (!state?.presetInner) return;
 
-        // Get current IDs for comparison
         const leftId = this.context.getPreset(true)?.presetID;
         const rightId = this.context.getPreset(false)?.presetID;
 
@@ -620,9 +394,8 @@ ${UIComponents.Elements.checkBox({ label: this.t('annotations.comments.autoOpen'
                 },
                 span({ class: `fa-auto ${preset.objectFactory.getIcon()}`, style: `color:${preset.color};` }),
                 span({ class: 'truncate flex-1 text-left' }, category),
-                // Show L/R indicators
-                isLeft ? span({class: 'badge badge-primary badge-xs h-4 min-h-0 w-4 p-0 font-bold'}, 'L') : null,
-                isRight ? span({class: 'badge badge-outline badge-xs h-4 min-h-0 w-4 p-0 font-bold'}, 'R') : null
+                isLeft ? span({ class: 'badge badge-primary badge-xs h-4 min-h-0 w-4 p-0 font-bold' }, 'L') : null,
+                isRight ? span({ class: 'badge badge-outline badge-xs h-4 min-h-0 w-4 p-0 font-bold' }, 'R') : null
             ));
             pushed = true;
         });
@@ -654,32 +427,14 @@ ${UIComponents.Elements.checkBox({ label: this.t('annotations.comments.autoOpen'
                 this._updateViewerControls();
                 this._refreshAllBoardPanels();
 
-                const toolBar =
-                    document.getElementById('annotations-tool-bar-content') ||
-                    document.getElementById('annotations-tool-bar');
-
-                if (toolBar) {
-                    toolBar.style.pointerEvents = nextEnabled ? 'auto' : 'none';
-                    toolBar.style.opacity = nextEnabled ? '1' : '0.5';
-                    toolBar.setAttribute('aria-disabled', nextEnabled ? 'false' : 'true');
-                    toolBar.classList.toggle('disabled', !nextEnabled);
-                }
+                USER_INTERFACE.Tools.setMenuEnabled?.(this.id, nextEnabled);
             },
             () => {
                 this.context.enableAnnotations(currentlyEnabled);
                 this._updateViewerControls();
                 this._refreshAllBoardPanels();
 
-                const toolBar =
-                    document.getElementById('annotations-tool-bar-content') ||
-                    document.getElementById('annotations-tool-bar');
-
-                if (toolBar) {
-                    toolBar.style.pointerEvents = currentlyEnabled ? 'auto' : 'none';
-                    toolBar.style.opacity = currentlyEnabled ? '1' : '0.5';
-                    toolBar.setAttribute('aria-disabled', currentlyEnabled ? 'false' : 'true');
-                    toolBar.classList.toggle('disabled', !currentlyEnabled);
-                }
+                USER_INTERFACE.Tools.setMenuEnabled?.(this.id, currentlyEnabled);
             }
         );
     },
@@ -764,40 +519,4 @@ ${UIComponents.Elements.checkBox({ label: this.t('annotations.comments.autoOpen'
         if (viewerOrId) return apply(this._getViewerUI(viewerOrId));
         for (const viewer of VIEWER_MANAGER.viewers || []) apply(this._getViewerUI(viewer.uniqueId));
     },
-
-    getExportScopeRadioButton(scope) {
-        const id = `export-scope-${scope}-radio`;
-        const label = scope === 'all' ? this.t('annotations.export.scopeOptions.all') : this.t('annotations.export.scopeOptions.selected');
-        const checked = this.exportOptions.scope === scope ? 'checked' : '';
-        return `
-      <div class="d-inline-block p-2">
-        <input type="radio" id="${id}" class="d-none switch" ${checked} name="annotation-scope-switch">
-        <label for="${id}" class="position-relative format-selector" onclick="${this.THIS}.setExportScope('${scope}');">
-          <span class="btn">${label}</span>
-        </label>
-      </div>`;
-    },
-
-    getIOFormatRadioButton(format) {
-        const selected = format === this.exportOptions.format ? 'checked' : '';
-        const convertor = OSDAnnotations.Convertor.get(format);
-        return `<div class="d-inline-block p-2"><input type="radio" id="${format}-export-format" class="hidden switch" ${selected} name="annotation-format-switch">
-<label for="${format}-export-format" class="position-relative format-selector" title="${convertor.description || ''}" onclick="${this.THIS}.updateSelectedFormat('${format}');"><span style="font-size: smaller">${convertor.title}</span><br>
-<span class="show-hint d-inline-block" data-hint="${this.t('annotations.export.formatHint')}"><span class="btn">${format}</span></span></label></div>`;
-    },
-
-    updateSelectedFormat(format) {
-        const convertor = OSDAnnotations.Convertor.get(format);
-        document.getElementById('downloadAnnotation').style.visibility = convertor.exportsObjects ? 'visible' : 'hidden';
-        document.getElementById('downloadPreset').style.visibility = convertor.exportsPresets ? 'visible' : 'hidden';
-        const scopeEl = document.getElementById('export-annotations-scope');
-        if (scopeEl) scopeEl.style.display = convertor.exportsObjects ? 'block' : 'none';
-
-        document.getElementById('importAnnotation').innerHTML = this.t('annotations.export.importFileButton', { format });
-        this.exportOptions.format = format;
-        this.setCacheOption('defaultIOFormat', format);
-        $('#annotation-convertor-options').html(
-            Object.values(convertor.options).map((option) => UIComponents.Elements[option.type]?.(option)).join('<br>')
-        );
-    }
 };

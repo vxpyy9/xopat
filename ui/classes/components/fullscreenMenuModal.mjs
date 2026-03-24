@@ -18,6 +18,13 @@ export class FullscreenMenuModal extends BaseComponent {
         this.hideBodyScroll = options.hideBodyScroll !== false;
         this.closeOnBackdrop = options.closeOnBackdrop !== false;
         this.title = options.title || "Menu";
+        this.defaultNamespace = options.defaultNamespace || FullscreenMenuModal.NAMESPACE.SYSTEM;
+        this.namespaceDefinitions = {};
+        this.namespaceOrder = [];
+
+        for (const namespace of (Array.isArray(options.namespaces) && options.namespaces.length ? options.namespaces : FullscreenMenuModal.DEFAULT_NAMESPACES)) {
+            this.registerNamespace(namespace);
+        }
 
         this.root = null;
         this.refs = {};
@@ -79,6 +86,72 @@ export class FullscreenMenuModal extends BaseComponent {
         return this.root;
     }
 
+    registerNamespace(namespace) {
+        const normalized = this._normalizeNamespaceDefinition(namespace);
+        const existing = this.namespaceDefinitions[normalized.id] || {};
+
+        this.namespaceDefinitions[normalized.id] = {
+            ...existing,
+            ...normalized,
+            order: normalized.order ?? existing.order ?? ((this.namespaceOrder.length + 1) * 10),
+        };
+
+        if (!this.namespaceOrder.includes(normalized.id)) {
+            this.namespaceOrder.push(normalized.id);
+        }
+
+        this.namespaceOrder.sort((left, right) => {
+            const leftOrder = this.namespaceDefinitions[left]?.order ?? 0;
+            const rightOrder = this.namespaceDefinitions[right]?.order ?? 0;
+            if (leftOrder === rightOrder) {
+                return left.localeCompare(right);
+            }
+            return leftOrder - rightOrder;
+        });
+
+        return this.namespaceDefinitions[normalized.id];
+    }
+
+    _normalizeNamespaceId(namespace) {
+        if (namespace && typeof namespace === "object") {
+            namespace = namespace.id;
+        }
+
+        return `${namespace || this.defaultNamespace || FullscreenMenuModal.NAMESPACE.PLUGINS}`;
+    }
+
+    _namespaceTitle(namespaceId) {
+        return `${namespaceId}`
+            .split(/[._-]/g)
+            .filter(Boolean)
+            .map(part => part.charAt(0).toUpperCase() + part.slice(1))
+            .join(" ");
+    }
+
+    _normalizeNamespaceDefinition(namespace) {
+        const id = this._normalizeNamespaceId(namespace);
+        if (typeof namespace === "string" || namespace == null) {
+            return { id, title: this._namespaceTitle(id) };
+        }
+
+        return {
+            ...namespace,
+            id,
+            title: namespace.title || namespace.label || this._namespaceTitle(id),
+        };
+    }
+
+    _orderedNamespacesWithItems() {
+        return this.namespaceOrder
+            .map(namespaceId => ({
+                ...(this.namespaceDefinitions[namespaceId] || { id: namespaceId, title: this._namespaceTitle(namespaceId) }),
+                items: this.order
+                    .map(id => this.items[id])
+                    .filter(item => item && !item.navHidden && item.namespace === namespaceId),
+            }))
+            .filter(namespace => namespace.items.length > 0);
+    }
+
     destroy() {
         document.removeEventListener("keydown", this._escapeHandler);
         this.root?.remove();
@@ -102,9 +175,11 @@ export class FullscreenMenuModal extends BaseComponent {
             body: item.body,
             onBeforeFocus: item.onBeforeFocus,
             navHidden: Boolean(item.navHidden),
-            pluginRootClass: item.pluginRootClass || ""
+            pluginRootClass: item.pluginRootClass || "",
+            namespace: this._normalizeNamespaceId(item.namespace)
         };
 
+        this.registerNamespace(item.namespace || normalized.namespace);
         this.items[normalized.id] = normalized;
         if (!this.order.includes(normalized.id)) {
             this.order.push(normalized.id);
@@ -164,26 +239,34 @@ export class FullscreenMenuModal extends BaseComponent {
         if (!this.refs.nav) return;
         this.refs.nav.replaceChildren();
 
-        for (const id of this.order) {
-            const item = this.items[id];
-            if (!item || item.navHidden) continue;
+        let firstNamespace = true;
+        for (const namespace of this._orderedNamespacesWithItems()) {
+            if (!firstNamespace) {
+                this.refs.nav.appendChild(div({ class: "my-2 border-t border-base-300/70" }));
+            }
 
-            const icon = span({
-                class: `fa-auto ${item.icon} text-sm opacity-80`
-            });
+            this.refs.nav.appendChild(div({ class: "px-3 pt-3 text-xs font-semibold uppercase tracking-[0.16em] text-base-content/50" }, namespace.title || namespace.label || namespace.id));
 
-            const label = span({ class: "truncate text-sm font-medium" }, item.label);
-            const navButton = button({
-                    type: "button",
-                    class: this._navButtonClass(item.id === this.activeId),
-                    onclick: () => this.focus(item.id)
-                },
-                icon,
-                label
-            );
+            for (const item of namespace.items) {
+                const icon = span({
+                    class: `fa-auto ${item.icon} text-sm opacity-80`
+                });
 
-            navButton.dataset.menuId = item.id;
-            this.refs.nav.appendChild(navButton);
+                const label = span({ class: "truncate text-sm font-medium" }, item.label);
+                const navButton = button({
+                        type: "button",
+                        class: this._navButtonClass(item.id === this.activeId),
+                        onclick: () => this.focus(item.id)
+                    },
+                    icon,
+                    label
+                );
+
+                navButton.dataset.menuId = item.id;
+                this.refs.nav.appendChild(navButton);
+            }
+
+            firstNamespace = false;
         }
     }
 
@@ -238,3 +321,14 @@ export class FullscreenMenuModal extends BaseComponent {
         ].join(" ");
     }
 }
+
+
+FullscreenMenuModal.NAMESPACE = {
+    SYSTEM: "system",
+    PLUGINS: "plugins",
+};
+
+FullscreenMenuModal.DEFAULT_NAMESPACES = [
+    { id: FullscreenMenuModal.NAMESPACE.SYSTEM, title: "System", order: 10 },
+    { id: FullscreenMenuModal.NAMESPACE.PLUGINS, title: "Plugins", order: 20 },
+];

@@ -58,7 +58,7 @@ export class FullscreenMenus {
             label: $.t?.("main.bar.settings") || "Settings",
             icon: "fa-gear",
             body: () => this.getSettingsBody
-        });
+        }, FullscreenMenuPanel.NAMESPACE.SYSTEM);
 
         this.register({
             id: "app-plugins",
@@ -66,7 +66,7 @@ export class FullscreenMenus {
             label: $.t?.("main.bar.plugins") || "Plugins",
             icon: "fa-puzzle-piece",
             body: () => this.getPluginsBody
-        });
+        }, FullscreenMenuPanel.NAMESPACE.SYSTEM);
     }
 
     _normalizeBody(body) {
@@ -76,7 +76,7 @@ export class FullscreenMenus {
         return body;
     }
 
-    register(item) {
+    register(item, ns = FullscreenMenuPanel.NAMESPACE.PLUGINS) {
         this._ensureInit();
         return this.menu.addTab({
             ...item,
@@ -84,14 +84,15 @@ export class FullscreenMenus {
         });
     }
 
-    addTab(item) {
+    addTab(item, ns = FullscreenMenuPanel.NAMESPACE.PLUGINS) {
         const label = item?.title || item?.label || item?.id;
         return this.register({
             id: item.id,
             title: label,
             label,
             icon: item.icon || "fa-circle",
-            body: () => item
+            body: () => item,
+            namespace: ns
         });
     }
 
@@ -174,7 +175,7 @@ export class FullscreenMenus {
             icon,
             pluginRootClass: `plugin-${ownerPluginId}-root`,
             body: () => mount
-        });
+        }, FullscreenMenuPanel.NAMESPACE.PLUGINS);
 
         const state = { mount, menu: submenu, id: key };
         this._pluginMenus[key] = state;

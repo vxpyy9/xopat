@@ -194,12 +194,13 @@ addPlugin('slide-info', class extends XOpatPlugin {
     }
 
     _createControlButtons(viewer) {
-        const active = APPLICATION_CONTEXT.config.background.length <= 1 ? {"active": "disabled"} : undefined;
-        USER_INTERFACE.addViewerHtml(
-            van.tags.div({class: "absolute bottom-0 left-[50%] flex flex-row", id: "slide-info-control-bar-"+viewer.id, style: "transform: translate(-50%, 0);"},
-                new UI.Button({onClick: this.changeSlide.bind(this, false), extraClasses: active}, '❮❮').create(),
-                this._customControlButtons,
-                new UI.Button({onClick: this.changeSlide.bind(this, true), extraClasses: active}, '❯❯').create()
-            ), this.id, viewer.id);
+        // todo consider supporting switching between slides, need to work reasonably with multiple viewers
+        // const active = APPLICATION_CONTEXT.config.background.length <= 1 ? {"active": "disabled"} : undefined;
+        // USER_INTERFACE.addViewerHtml(
+        //     van.tags.div({class: "absolute bottom-0 left-[50%] flex flex-row", id: "slide-info-control-bar-"+viewer.id, style: "transform: translate(-50%, 0);"},
+        //         new UI.Button({onClick: this.changeSlide.bind(this, false), extraClasses: active}, '❮❮').create(),
+        //         this._customControlButtons,
+        //         new UI.Button({onClick: this.changeSlide.bind(this, true), extraClasses: active}, '❯❯').create()
+        //     ), this.id, viewer.id);
     }
 });

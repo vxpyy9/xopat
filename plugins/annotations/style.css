@@ -1,0 +1,7 @@
+.annotation-board-panel { scroll-behavior: smooth; }
+.history-selected { background-color: var(--fallback-p, oklch(var(--p) / 0.15)) !important; }
+.history-layer-current { border-right: 4px solid var(--fallback-p, oklch(var(--p))); }
+.drag-ghost { opacity: 0.4; background: var(--fallback-b3, oklch(var(--b3))); border: 2px dashed var(--fallback-bc, oklch(var(--bc) / 0.2)); }
+.drag-chosen { background: var(--fallback-b2, oklch(var(--b2))); }
+/* Ensure inputs inside the list look clean during edit */
+.history-item-row input { height: 1.5rem; font-size: 0.875rem; background: var(--fallback-b1, oklch(var(--b1))); padding: 0 4px; border-radius: 4px; }
