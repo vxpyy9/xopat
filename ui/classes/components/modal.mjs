@@ -4,6 +4,12 @@ import {BaseComponent} from "../baseComponent.mjs";
 const { div } = van.tags;
 
 export class Modal extends BaseComponent {
+    // todo this should be functional, not static string!
+    static CLOSE_BUTTON_SIDE = {
+        LEFT: "left",
+        RIGHT: "right",
+    };
+
     constructor(options) {
         super(options);
         this.options = options || {};
@@ -11,7 +17,9 @@ export class Modal extends BaseComponent {
         this.width = options.width || "min(400px, 80vw)";
         this.isBlocking = options.isBlocking ?? false;
         this.allowResize = options.allowResize ?? false;
+        this.borderLess = options.borderLess ?? false;
         this.allowClose = options.allowClose !== undefined ? options.allowClose : true;
+        this.closeButtonSide = options.closeButtonSide || Modal.CLOSE_BUTTON_SIDE.RIGHT;
 
         this._mouseMoving = this.__mouseMoving.bind(this);
         this._mouseUp = this.__mouseUp.bind(this);
@@ -25,21 +33,39 @@ export class Modal extends BaseComponent {
     create() {
         if (this.root) return this.root;
 
+        let style = "";
+        if (this.width) {
+            style += `width: ${this.width}; max-width: ${this.width};`;
+        } else {
+            style += "max-width: 35rem;";
+        }
+
+        if (this.borderLess) {
+            style += "padding: 0;";
+        }
+
+        const closeButtonPositionClass = this.closeButtonSide === Modal.CLOSE_BUTTON_SIDE.LEFT
+            ? "left-2"
+            : "right-2";
+        const headerPaddingClass = this.closeButtonSide === Modal.CLOSE_BUTTON_SIDE.LEFT
+            ? "pl-10"
+            : "pr-10";
+
         const box = div(
             {
                 class: "modal-box relative",
-                style: this.width ? `width: ${this.width};` : 'max-width: 35rem;',
+                style: style,
             },
             this.allowClose
                 ? div(
                     {
-                        class: "btn btn-sm btn-circle btn-ghost absolute right-2 top-2",
+                        class: `btn btn-sm btn-circle btn-ghost absolute ${closeButtonPositionClass} top-2`,
                         onclick: () => this.close()
                     },
                     "✕"
                 )
                 : null,
-            this.options.header ? div({ class: "text-lg font-bold pr-10 mb-2" }, this.options.header) : null,
+            this.options.header ? div({ class: `text-lg font-bold ${headerPaddingClass} mb-2` }, this.options.header) : null,
             this.options.body ? div({ class: "modal-body bg-base-100 rounded-lg" }, this.options.body) : null,
             this.options.footer ? div({ class: "modal-action" }, this.options.footer) : null,
         );

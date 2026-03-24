@@ -79,6 +79,7 @@ export class FullscreenMenu extends BaseComponent{
     }
 
     create(){
+        // todo this seems unused, verify!
         return div({ id: "overlay", class: "hidden " + (this.mobile ? "mobile" : "") },
             div({ id: "overlay-darken", onclick: () => {this.unfocusAll()} }),
             div({ id: "overlay-content", class: "relative" }, this.closeBtn.create(), this.content.create()),
