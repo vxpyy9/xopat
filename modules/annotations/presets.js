@@ -317,18 +317,19 @@ OSDAnnotations.PresetManager = class {
      * Safely remove preset
      * @event preset-delete
      * @param {string} id preset id
-     * @returns deleted preset or false if deletion failed
+     * @returns {OSDAnnotations.Preset|false|null} deleted preset or false if deletion failed or null if
+     *   deletion was not possible (e.g. preset is used by existing annotations)
      */
     removePreset(id) {
         let toDelete = this._presets[id];
-        if (!toDelete) return undefined;
+        if (!toDelete) return false;
 
         if (this._context.fabric.canvas._objects.some(o => {
             return o.presetID === id;
         })) {
             Dialogs.show("This preset belongs to existing annotations: it cannot be removed.",
                 8000, Dialogs.MSG_WARN);
-            return undefined;
+            return null;
         }
         delete this._presets[id];
         this._context.raiseEvent('preset-delete', {preset: toDelete});

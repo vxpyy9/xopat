@@ -767,6 +767,23 @@ export function initXOpat(PLUGINS: Record<string, XOpatElementItem>, MODULES: Re
             return getGoal(bgIndices as number);
         };
 
+        const normalizeStoredBackgroundSelection = (value: any): number[] | undefined => {
+            if (value == null) return undefined;
+            if (Array.isArray(value)) {
+                const filtered = value.filter((v: any) => Number.isInteger(v));
+                return filtered.length > 0 ? filtered : undefined;
+            }
+            return Number.isInteger(value) ? [value] : undefined;
+        };
+
+        const normalizeStoredVisualizationSelection = (value: any): Array<number | undefined> | undefined => {
+            if (value == null) return undefined;
+            if (Array.isArray(value)) {
+                return value.map((v: any) => Number.isInteger(v) ? v : undefined);
+            }
+            return Number.isInteger(value) ? [value] : undefined;
+        };
+
         let updated = false;
 
         // ---------- Handle bgSpec (null => erase; undefined => keep; value => set) ----------
@@ -777,12 +794,15 @@ export function initXOpat(PLUGINS: Record<string, XOpatElementItem>, MODULES: Re
             effectiveBg = undefined;
         } else if (bgSpec !== undefined) {
             const newActiveBg = selectBackgroundIndices(bgSpec, backgrounds.length);
-            const prevActiveBg = APPLICATION_CONTEXT.getOption("activeBackgroundIndex", undefined, true, false);
-            if (prevActiveBg !== JSON.stringify(newActiveBg)) {
-                APPLICATION_CONTEXT.setOption("activeBackgroundIndex", newActiveBg);
+            const normalizedActiveBg = normalizeStoredBackgroundSelection(newActiveBg);
+            const prevActiveBg = normalizeStoredBackgroundSelection(
+                APPLICATION_CONTEXT.getOption("activeBackgroundIndex", undefined, true, true)
+            );
+            if (JSON.stringify(prevActiveBg) !== JSON.stringify(normalizedActiveBg)) {
+                APPLICATION_CONTEXT.setOption("activeBackgroundIndex", normalizedActiveBg);
                 updated = true;
             }
-            effectiveBg = newActiveBg;
+            effectiveBg = normalizedActiveBg;
         }
 
         // Always have a convenient array view of selected backgrounds
@@ -810,11 +830,15 @@ export function initXOpat(PLUGINS: Record<string, XOpatElementItem>, MODULES: Re
             } // else: vizSpec === undefined and derive flag is false => keep existing option
 
             if (typeof desiredActiveVis !== "undefined") {
-                const prevActiveVis = APPLICATION_CONTEXT.getOption("activeVisualizationIndex", undefined, true, false);
-                if (prevActiveVis !== JSON.stringify(desiredActiveVis)) {
-                    APPLICATION_CONTEXT.setOption("activeVisualizationIndex", desiredActiveVis);
+                const normalizedActiveVis = normalizeStoredVisualizationSelection(desiredActiveVis);
+                const prevActiveVis = normalizeStoredVisualizationSelection(
+                    APPLICATION_CONTEXT.getOption("activeVisualizationIndex", undefined, true, true)
+                );
+                if (JSON.stringify(prevActiveVis) !== JSON.stringify(normalizedActiveVis)) {
+                    APPLICATION_CONTEXT.setOption("activeVisualizationIndex", normalizedActiveVis);
                     updated = true;
                 }
+                desiredActiveVis = normalizedActiveVis;
 
                 // Persist per-background goalIndex when we have a concrete desiredActiveVis
                 if (selectedBgArray.length > 0) {
@@ -1666,7 +1690,6 @@ export function initXOpat(PLUGINS: Record<string, XOpatElementItem>, MODULES: Re
             }
 
             clearTimeout(loadTooLongTimeout);
-            USER_INTERFACE.Loading.show(false);
             // todo: maybe dont do this, only if no active viewer is set
             VM.setActive(0);
             // todo a bit ugly, fix later
@@ -1680,13 +1703,20 @@ export function initXOpat(PLUGINS: Record<string, XOpatElementItem>, MODULES: Re
                     VIEWER_MANAGER.raiseEvent('after-open');
                 }
             });
+            UTILITIES.syncOpenedViewersToSession();
             UTILITIES.syncSessionToUrl(false);
+            USER_INTERFACE.Loading.show(false);
             console.log("Open done:", e);
             if (USER_INTERFACE.Errors.active) {
                 $("#viewer-container").addClass("disabled"); //preventive
             }
             //todo make sure bypassCache and bypassCookies is set to true if this option is true - temporarily
             APPLICATION_CONTEXT.setOption("bypassCacheLoadTime", false);
+        }).catch(e => {
+            clearTimeout(loadTooLongTimeout);
+            console.error("Failed to open viewer items", e);
+            USER_INTERFACE.Loading.show(false);
+            Dialogs.show($.t("error.slide.failed"), 15000, Dialogs.MSG_ERROR);
         });
         return true;
     };
@@ -2047,14 +2077,17 @@ export function initXOpat(PLUGINS: Record<string, XOpatElementItem>, MODULES: Re
                         case "r":
                         case "R":
                             VIEWER.viewport.setRotation(0);
+                            e.preventDefault();
                             return;
                         case "q":
                         case "Q": // Rotate Left
                             VIEWER.viewport.setRotation(VIEWER.viewport.getRotation() - 90);
+                            e.preventDefault();
                             return;
                         case "e":
                         case "E": // Rotate Right
                             VIEWER.viewport.setRotation(VIEWER.viewport.getRotation() + 90);
+                            e.preventDefault();
                             return;
                         default:
                             return;

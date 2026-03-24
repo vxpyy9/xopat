@@ -136,7 +136,7 @@ export function initXOpatLoader(ENV: XOpatCoreConfig, PLUGINS: Record<string, XO
         return plugin;
     }
 
-    async function initializePlugin(plugin: IXOpatPlugin) {
+    async function initializePlugin(plugin: IXOpatPlugin, outsideLoad: boolean = true) {
         if (!plugin) {
             console.warn("Attempt to initialize undefined plugin.");
             return false;
@@ -147,6 +147,11 @@ export function initXOpatLoader(ENV: XOpatCoreConfig, PLUGINS: Record<string, XO
                 await plugin.pluginReady();
             }
             PLUGINS[plugin.id]!.__ready = true;
+
+            if (outsideLoad) {
+                // do not await - let
+                VIEWER_MANAGER.forceDataImportInitialization();
+            }
 
             /**
              * Plugin was loaded dynamically at runtime.
@@ -762,9 +767,13 @@ export function initXOpatLoader(ENV: XOpatCoreConfig, PLUGINS: Record<string, XO
                         const exportKey = vanillaExportKey + "::";
                         for (let v of VIEWER_MANAGER.viewers) {
                             const contextID = findViewerUniqueId(v) ?? "__unknown_viewer_ref__";
-                            const viewerData = await this.exportViewerData(v, vanillaExportKey, contextID);
-                            if (data) {
-                                await store.set(exportKey + contextID, viewerData);
+                            try {
+                                const viewerData = await this.exportViewerData(v, vanillaExportKey, contextID);
+                                if (viewerData) {
+                                    await store.set(exportKey + contextID, viewerData);
+                                }
+                            } catch (e) {
+                                console.warn(`Error exporting viewer data ${contextID} for ${this.id}`, e);
                             }
                         }
                     }
@@ -1828,7 +1837,7 @@ export function initXOpatLoader(ENV: XOpatCoreConfig, PLUGINS: Record<string, XO
                 }
 
                 if (pluginsWereInitialized()) {
-                    initializePlugin(PLUGINS[id]?.instance).then(success => {
+                    initializePlugin(PLUGINS[id]?.instance, true).then(success => {
                         if (success) {
                             finishPluginLoad();
                         }
@@ -2470,6 +2479,82 @@ form.submit();
          */
         setIsCanvasFocused: function (focused: boolean) {
             focusOnViewer = focused;
+        },
+
+        /**
+         * Sync live multi-view selection back into session params so export can directly
+         * serialize APPLICATION_CONTEXT.config.params without reconstructing viewer state.
+         *
+         * Note: activeBackgroundIndex currently cannot represent blank viewer slots, so only
+         * viewers with a resolved background are persisted.
+         */
+        syncOpenedViewersToSession: function() {
+            const viewers = (VIEWER_MANAGER.viewers || []).filter(Boolean);
+            const backgrounds = Array.isArray(APPLICATION_CONTEXT.config.background) ? APPLICATION_CONTEXT.config.background : [];
+            const visualizations = Array.isArray(APPLICATION_CONTEXT.config.visualizations) ? APPLICATION_CONTEXT.config.visualizations : [];
+
+            const getBackgroundConfig = (viewer: OpenSeadragon.Viewer) => {
+                const ref = viewer.scalebar?.getReferencedTiledImage?.()?.getConfig?.("background");
+                if (ref) return ref;
+
+                const count = viewer.world?.getItemCount?.() || 0;
+                for (let i = 0; i < count; i++) {
+                    const cfg = viewer.world.getItemAt(i)?.getConfig?.("background");
+                    if (cfg) return cfg;
+                }
+                return undefined;
+            };
+
+            const getVisualizationConfig = (viewer: OpenSeadragon.Viewer) => {
+                const count = viewer.world?.getItemCount?.() || 0;
+                for (let i = 0; i < count; i++) {
+                    const cfg = viewer.world.getItemAt(i)?.getConfig?.("visualization");
+                    if (cfg) return cfg;
+                }
+                return undefined;
+            };
+
+            const findVisualizationIndex = (vizCfg: any) => {
+                if (!vizCfg) return undefined;
+                const idx = visualizations.findIndex((viz: any) =>
+                    viz === vizCfg ||
+                    (viz?.id !== undefined && vizCfg?.id !== undefined && viz.id === vizCfg.id)
+                );
+                return idx >= 0 ? idx : undefined;
+            };
+
+            const resolved = viewers
+                .map((viewer: OpenSeadragon.Viewer) => {
+                    const bgCfg = getBackgroundConfig(viewer);
+                    const bgIndex = bgCfg
+                        ? backgrounds.findIndex((bg: BackgroundItem | BackgroundConfig) => APPLICATION_CONTEXT.sameBackground(bg, bgCfg))
+                        : -1;
+                    const vizIndex = findVisualizationIndex(getVisualizationConfig(viewer));
+                    return {
+                        bgIndex: bgIndex >= 0 ? bgIndex : undefined,
+                        vizIndex,
+                    };
+                })
+                .filter(({ bgIndex, vizIndex }) => bgIndex !== undefined || vizIndex !== undefined);
+
+            const activeBackgroundIndex = resolved
+                .map(({ bgIndex }) => bgIndex)
+                .filter((value): value is number => Number.isInteger(value));
+
+            const activeVisualizationIndex = resolved.length > 0
+                ? resolved.map(({ vizIndex }) => vizIndex)
+                : undefined;
+
+            APPLICATION_CONTEXT.setOption(
+                "activeBackgroundIndex",
+                activeBackgroundIndex.length > 0 ? activeBackgroundIndex : undefined,
+            );
+            APPLICATION_CONTEXT.setOption(
+                "activeVisualizationIndex",
+                activeVisualizationIndex && activeVisualizationIndex.some(v => v !== undefined)
+                    ? activeVisualizationIndex
+                    : undefined,
+            );
         }
     };
 
@@ -2953,37 +3038,6 @@ form.submit();
                         this.raiseEvent('viewer-create', { viewer, uniqueId: viewer.uniqueId, index });
                     }
                 }
-
-                // Every load event, update data
-                (async function () {
-                    // Find all imports that fit to the target viewer and import to the plugin
-                    const contextID = findViewerUniqueId(viewer);
-
-                    for (let element of REGISTERED_ELEMENTS) {
-                        if (typeof element.getOption === "function" && element.getOption('ignorePostIO', false)) {
-                            return;
-                        }
-
-                        const store = (element as any)[STORE_TOKEN];
-                        if (!store) continue;
-
-                        for (let key of await store.keys()) {
-                            const keyParts = key.split("::");
-                            if (keyParts.length < 2 || keyParts[1] !== contextID) continue;
-                            const data = await store?.get(key);
-                            try {
-                                if (data !== undefined) await element.importViewerData(viewer, key, contextID!, data);
-                            } catch (e) {
-                                console.error('IO Failure:', element.constructor.name, e);
-                                element.error({
-                                    error: e, code: "W_IO_INIT_ERROR",
-                                    message: $.t('error.pluginImportFail',
-                                        { plugin: element.id, action: "USER_INTERFACE.highlightElementId('global-export');" })
-                                });
-                            }
-                        }
-                    }
-                })();
             });
 
             viewer.addHandler('destroy', () => {
@@ -3105,6 +3159,56 @@ form.submit();
                 viewer = viewerOrId;
             }
             return viewer?.id ? this.viewerMenus[viewer.id] : undefined;
+        }
+
+        /**
+         * Initialize static POST data for plugins and modules.
+         */
+        async forceDataImportInitialization() {
+            try {
+                for (let viewer of this.viewers) {
+                    // Find all imports that fit to the target viewer and import to the plugin
+                    const contextID = findViewerUniqueId(viewer);
+                    if (!contextID) {
+                        console.warn("Viewer has no unique ID, skipping plugin data initialization");
+                        continue;
+                    }
+
+                    for (let element of REGISTERED_ELEMENTS) {
+                        if (typeof element.getOption === "function" && element.getOption('ignorePostIO', false)) {
+                            continue;
+                        }
+
+                        const store = (element as any)[STORE_TOKEN];
+                        if (!store) continue;
+                        // todo: how often to import data? only when new viewer is created? what if user has
+                        //  some data and the some reload events rewrites it? for now we do strictly just once
+                        if (!store.__xoDataImported) {
+                            store.__xoDataImported = {};
+                        }
+                        if (store.__xoDataImported[contextID]) continue;
+                        store.__xoDataImported[contextID] = true;
+
+                        for (let key of await store.keys()) {
+                            const keyParts = key.split("::");
+                            if (keyParts.length < 2 || keyParts[1] !== contextID) continue;
+                            const data = await store?.get(key);
+                            try {
+                                if (data !== undefined) await element.importViewerData(viewer, key, contextID!, data);
+                            } catch (e) {
+                                console.error('IO Failure:', element.constructor.name, e);
+                                element.error({
+                                    error: e, code: "W_IO_INIT_ERROR",
+                                    message: $.t('error.pluginImportFail',
+                                        { plugin: element.id, action: "USER_INTERFACE.highlightElementId('global-export');" })
+                                });
+                            }
+                        }
+                    }
+                }
+            } catch (e) {
+                console.error('IO Failure:', e);
+            }
         }
 
         /**
@@ -3277,8 +3381,8 @@ form.submit();
             }
         }
 
-        return Promise.all(REGISTERED_PLUGINS!.map(plugin => initializePlugin(plugin))).then(() => {
+        return Promise.all(REGISTERED_PLUGINS!.map(plugin => initializePlugin(plugin, false))).then(() => {
             REGISTERED_PLUGINS = undefined;
-        }).then(callDeployedViewerInitialized);
+        }).then(() => VIEWER_MANAGER.forceDataImportInitialization()).then(callDeployedViewerInitialized);
     };
 }

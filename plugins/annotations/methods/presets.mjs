@@ -290,13 +290,18 @@ export const presetMethods = {
 
     removePreset(buttonNode, presetId) {
         if (!this.enablePresetModify) return;
-        if (this.context.presets.removePreset(presetId)) {
+
+        const removed = this.context.presets.removePreset(presetId);
+        if (removed) {
             buttonNode.closest('[data-preset-id]')?.remove();
             this.context.createPresetsCookieSnapshot();
             this._updateRightSideMenuPresetList();
             return;
         }
-        Dialogs.show('Failed to remove preset.', 2500, Dialogs.MSG_ERR);
+        if (removed === false) {
+            console.warn('Failed to remove preset', presetId);
+            Dialogs.show('Failed to remove preset.', 5000, Dialogs.MSG_ERR);
+        }
     },
 
     updatePresetWith(id, propName, value) {

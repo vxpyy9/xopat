@@ -110,7 +110,7 @@ function errClassApi(cls: Function, keys: string[]): string | false {
 class APIProxy {
     protected __id: string;
     protected __storage: StorageLike | AsyncStorageLike;
-    protected validateKey: (key: string, withSuffix?: boolean) => string;
+    protected validateKey: (key: string, withPrefix?: boolean) => string;
     protected deprecatedKeys: (key: string) => string[];
 
     constructor(options: StorageOptions) {
@@ -134,22 +134,23 @@ class APIProxy {
 
         if (schema) {
             options.strictSchema = options.strictSchema ?? true;
-            this.validateKey = (key, withSuffix = true) => {
+            this.validateKey = (key, withPrefix = true) => {
                 const ref = schema[key];
                 if (ref) {
                     if (!key) return uid;
-                    if (withSuffix) return this.__id + key;
+                    if (withPrefix) return this.__id + key;
                     return key;
                 }
                 if (options.strictSchema) {
                     throw `${this.constructor.name}: invalid schema key '${key}' for data '${options.id}' in a strict mode!`;
                 }
+                if (withPrefix) return this.__id + key;
                 return key;
             }
         } else {
-            this.validateKey = (key, withSuffix = true) => {
+            this.validateKey = (key, withPrefix = true) => {
                 if (!key) return uid;
-                if (withSuffix) return this.__id + key;
+                if (withPrefix) return this.__id + key;
                 return key;
             };
         }
@@ -163,6 +164,13 @@ class APIProxy {
         } else {
             this.deprecatedKeys = (key) => [];
         }
+    }
+
+    protected stripKeyPrefix(key: string): string {
+        if (key.startsWith( this.__id ) ) {
+            return key.slice( this.__id.length );
+        }
+        return key;
     }
 
     get id(): string {
@@ -251,7 +259,8 @@ export class SyncAPIProxy extends APIProxy {
 
     keys(): string[] {
         const store = this.__storage as Storage;
-        return Array.from(Array(store.length).keys()).map(i => store.key(i) as string);
+        // ensure we remove auto-appended prefix so the user uses it without knowledge of prefixing
+        return Array.from(Array(store.length).keys()).map(i => this.stripKeyPrefix(store.key(i) as string));
     }
 }
 
@@ -294,7 +303,9 @@ export class AsyncAPIProxy extends APIProxy {
 
     async keys(): Promise<Array<string | null>> {
         const store = this.__storage as AsyncStorageLike;
-        return Promise.all(Array.from(Array(await store.length).keys()).map(async i => await store.key(i)));
+        // ensure we remove auto-appended prefix so the user uses it without knowledge of prefixing
+        return Promise.all(Array.from(Array(await store.length).keys())
+            .map(async i => this.stripKeyPrefix(await store.key(i) as string)));
     }
 }
 

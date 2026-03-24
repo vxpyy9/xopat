@@ -37,6 +37,7 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
         this.commentsEnabled = true;
 		this._init();
 		this.user = XOpatUser.instance();
+        VIEWER_MANAGER.addHandler('before-open', () => this.setMode(this.Modes.AUTO));
 	}
 
     /**
@@ -196,26 +197,18 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
         return this._ioArgs;
     }
 
-	async exportData() {
-        // todo we should export all..
-        return await this.fabric.export();
-	}
-
-	async importData(data) {
-        // todo mutiplex
-        const options = {inheritSession: true};
-		if (typeof data === "object" && data.format) {
-			options.format = data.format;
-		}
-        await this.fabric.import(data, options);
-	}
-
-    // todo implement
     async exportViewerData(viewer, key, viewerTargetID) {
-        return {};
+        const fabric = this.getFabric(viewer);
+        return fabric.export();
     }
 
-    async importViewerData(viewer, key, viewerTargetID, data) {}
+    async importViewerData(viewer, key, viewerTargetID, data) {
+        if (data === undefined || data === null) return;
+
+        const fabric = this.getFabric(viewer);
+        const options = { inheritSession: true };
+        await fabric.import(data, options);
+    }
 
 	/**
 	 * Get the currently used data persistence storage module.

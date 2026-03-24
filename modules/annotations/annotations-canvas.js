@@ -1941,14 +1941,6 @@ OSDAnnotations.FabricWrapper = class extends XOpatViewerSingleton {
             }
 
             let factory = _this.module.presets.left ? _this.module.presets.left.objectFactory : undefined;
-            if (!factory) {
-                // try to recover
-                const presets = _this.module.presets.getExistingIds();
-                if (presets.length > 0) {
-                    factory = presets[0];
-                    _this.module.setPreset(factory, true);
-                }
-            }
             let point = screenToPixelCoords(event.x, event.y);
             _this.module.mode.handleClickDown(event, point, true, factory);
             // set after handleClickDown -> viewerLocked will be set to false by default after we set isDown to true
