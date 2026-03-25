@@ -370,7 +370,7 @@ OSDAnnotations.Ruler = class extends OSDAnnotations.AnnotationObjectFactory {
     }
 
     toPointArray(obj, converter, digits=undefined, quality=1) {
-        const line = obj.objects ? obj.objects[0] : [];
+        const line = obj._objects?.[0] || obj.objects?.[0] || [];
 
         let x1 = line.x1 + obj.left + obj.width/2;
         let y1 = line.y1 + obj.top + obj.height/2;
