@@ -382,7 +382,7 @@ ${core.requireCore("deps")}`;
 
 const server = http.createServer(async (req, res) => {
     try {
-        const protocol = req.headers['x-forwarded-proto'] || 'http';
+        const protocol = (req.headers['x-forwarded-proto'] || 'http').split(',')[0].trim();
         const urlObj = new URL(`${protocol}://${req.headers.host}${req.url}`);
 
         if (urlObj.pathname.startsWith("/health")) {

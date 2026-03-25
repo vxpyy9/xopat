@@ -94,7 +94,7 @@ class XopatServerRuntime {
         this.root = options.root || process.cwd();
         this.pluginsDir = options.pluginsDir || path.join(this.root, "plugins");
         this.modulesDir = options.modulesDir || path.join(this.root, "modules");
-        this.cacheDir = options.cacheDir || path.join(this.root, "server/.cache");
+        this.cacheDir = options.cacheDir || process.env.XOPAT_CACHE_DIR || path.join(this.root, "server/.cache");
         this.serverBuildDirName = options.serverBuildDirName || SERVER_BUILD_DIR;
         this.logger = options.logger || console;
         this.auth = options.auth || {};
