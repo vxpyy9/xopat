@@ -150,11 +150,11 @@ OSDAnnotations.PresetManager = class {
         selectable: true,
         originalStrokeWidth: 3,
         borderColor: 'rgba(251,184,2,0.35)',
-        cornerColor: 'rgba(251,184,2,0.35)',
+        cornerColor: 'rgba(251, 185, 2, 1)',
         stroke: 'black',
         borderScaleFactor: 3,
         strokeSide: 'center',
-        hasControls: false,
+        hasControls: true,
         hasBorders: false,
         lockMovementY: true,
         lockMovementX: true,
@@ -317,18 +317,19 @@ OSDAnnotations.PresetManager = class {
      * Safely remove preset
      * @event preset-delete
      * @param {string} id preset id
-     * @returns deleted preset or false if deletion failed
+     * @returns {OSDAnnotations.Preset|false|null} deleted preset or false if deletion failed or null if
+     *   deletion was not possible (e.g. preset is used by existing annotations)
      */
     removePreset(id) {
         let toDelete = this._presets[id];
-        if (!toDelete) return undefined;
+        if (!toDelete) return false;
 
         if (this._context.fabric.canvas._objects.some(o => {
             return o.presetID === id;
         })) {
             Dialogs.show("This preset belongs to existing annotations: it cannot be removed.",
                 8000, Dialogs.MSG_WARN);
-            return undefined;
+            return null;
         }
         delete this._presets[id];
         this._context.raiseEvent('preset-delete', {preset: toDelete});
@@ -413,7 +414,7 @@ OSDAnnotations.PresetManager = class {
      */
     setCommonVisualProp(propertyName, propertyValue) {
         if (this.commonAnnotationVisuals[propertyName] === undefined) {
-            console.error("[setCommonVisualProp] property name not one of", this.presets.constructor.commonAnnotationVisuals, propertyName);
+            console.error("[setCommonVisualProp] property name not one of", this.constructor.commonAnnotationVisuals, propertyName);
             return false;
         }
         this._context.cache.set('visuals.' + propertyName, propertyValue);
@@ -541,9 +542,9 @@ OSDAnnotations.PresetManager = class {
             zoom = canvas.getZoom(),
             gZoom = canvas.computeGraphicZoom(zoom);
 
-        const layerID = this._context.fabric.getActiveLayer()?.id;
+        //const layerID = this._context.fabric.getActiveLayer()?.id;
         return $.extend(options, {
-            layerID: layerID,
+            layerID: undefined,
             zoomAtCreation: zoom,
             strokeWidth: this.commonAnnotationVisuals.originalStrokeWidth / gZoom
         });
@@ -603,6 +604,8 @@ OSDAnnotations.PresetManager = class {
  */
 OSDAnnotations.Layer = class {
 
+    static _counter = 0;
+
     /**
      * Constructor
      * @param {OSDAnnotations} context Annotation Plugin Context
@@ -614,6 +617,7 @@ OSDAnnotations.Layer = class {
         this._objects = [];
         this.type = "layer";
         this.visible = true;
+        this.name = `Layer ${++OSDAnnotations.Layer._counter}`;
         this._name = undefined;
     }
 
@@ -669,9 +673,9 @@ OSDAnnotations.Layer = class {
             } else {
                 this._objects.push(object);
             }
-            object.layerID = this.id;
-            object.visible = this.visible;
 
+            object.layerID = this.id;
+            this._context.fabric._applyAnnotationVisibilityState?.(object);
             this._context.fabric.rerender();
         }
     }
@@ -717,14 +721,23 @@ OSDAnnotations.Layer = class {
      * @param {fabric.Object[]} objects array of objects
      */
     setObjects(objects, changeLayerID = false) {
-        this._objects.forEach(object => {object.visible = true});
+        this._objects.forEach(object => {
+            object.visible = true;
+            object.evented = true;
+            object.selectable = true;
+        });
+
         this._objects = objects;
-        this._objects.forEach(object => {object.visible = this.visible});
+
         if (changeLayerID) {
             this._objects.forEach(obj => {
                 obj.layerID = this.id;
             });
         }
+
+        this._objects.forEach(object => {
+            this._context.fabric._applyAnnotationVisibilityState?.(object);
+        });
 
         this._context.fabric.rerender();
     }
@@ -751,15 +764,19 @@ OSDAnnotations.Layer = class {
         return this._objects.some(obj => obj.internalID === object.internalID);
     }
 
+    setVisibility(visible) {
+        this.visible = !!visible;
+        this._objects.forEach(obj => {
+            this._context.fabric._applyAnnotationVisibilityState?.(obj);
+        });
+        this._context.fabric.rerender();
+    }
+
     /**
-    * Toggle the visibility of all objects in the layer
-    */
+     * Toggle the visibility of all objects in the layer
+     */
     toggleVisibility() {
-       this.visible = !this.visible;
-       this._objects.forEach(obj => {
-           obj.visible = this.visible;
-       });
-       this._context.fabric.rerender();
+        this.setVisibility(!this.visible);
     }
 
     /**

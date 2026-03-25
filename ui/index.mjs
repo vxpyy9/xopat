@@ -28,6 +28,8 @@ import { MainPanel } from "./classes/components/mainPanel.mjs";
 import { MultiPanelMenuTab } from "./classes/components/multiPanelMenuTab.mjs";
 import { MultiPanelMenu } from "./classes/components/multiPanelMenu.mjs";
 import { FullscreenMenu } from "./classes/components/fullscreenMenu.mjs";
+import { FullscreenMenuNavTab } from "./classes/components/fullscreenMenuNavTab.mjs";
+import { FullscreenMenuPanel } from "./classes/components/fullscreenMenuPanel.mjs";
 import { TabsMenu } from "./classes/components/tabsMenu.mjs";
 import { Toolbar } from "./classes/components/toolbar/toolbar.mjs";
 import { ToolbarItem} from "./classes/components/toolbar/toolbarItem.mjs";
@@ -53,6 +55,7 @@ import { GlobalTooltip } from "./services/globalTooltip.mjs";
 import { AppBar } from "./services/appBar.mjs";
 import { MobileBottomBar } from "./services/mobileBottomBar.mjs";
 import { FloatingManager } from "./services/floatingManager.mjs";
+import { FullscreenMenus } from "./services/fullscreenMenus.mjs";
 
 // MIXINS
 import { VisibilityManager } from "./classes/mixins/visibilityManager.mjs";
@@ -63,11 +66,8 @@ class ServiceContainer {
     _appBar = null;
     _MobileBottomBar = null;
     _floatingManager = null;
+    _fullscreenMenus = null;
 
-    /**
-     * Gets the GlobalTooltip service.
-     * Instantiates it on the first call.
-     */
     get GlobalTooltip() {
         if (!this._globalTooltip) {
             this._globalTooltip = new GlobalTooltip();
@@ -75,10 +75,6 @@ class ServiceContainer {
         return this._globalTooltip;
     }
 
-    /**
-     * Gets the AppBar service.
-     * Instantiates it on the first call.
-     */
     get AppBar() {
         if (!this._appBar) {
             this._appBar = new AppBar();
@@ -86,10 +82,6 @@ class ServiceContainer {
         return this._appBar;
     }
 
-    /**
-     * Gets the MobileBottomBar service.
-     * Instantiates it on the first call.
-     */
     get MobileBottomBar() {
         if (!this._MobileBottomBar) {
             this._MobileBottomBar = new MobileBottomBar();
@@ -97,33 +89,32 @@ class ServiceContainer {
         return this._MobileBottomBar;
     }
 
-    /**
-     * Gets the FloatingManager service.
-     * Instantiates it on the first call.
-     */
     get FloatingManager() {
         if (!this._floatingManager) {
             this._floatingManager = new FloatingManager();
         }
         return this._floatingManager;
     }
+
+    get FullscreenMenus() {
+        if (!this._fullscreenMenus) {
+            this._fullscreenMenus = new FullscreenMenus();
+        }
+        return this._fullscreenMenus;
+    }
 }
 
 const UI = {
-    // Elements
     BaseComponent,
     Button, FAIcon, Join, Div, Dropdown, Checkbox, Select, RawHtml, Alert,
     StretchGrid, Input, Badge, Title, Collapse, Loading,
 
-    // Components
-    Menu, MainPanel, MultiPanelMenuTab, MultiPanelMenu, FullscreenMenu, TabsMenu, ShaderLayer,
-    ShaderSideMenu, FloatingWindow, MainLayout, Toast, MenuTabBanner, RightSideViewerMenu, NavigatorSideMenu,
-    Explorer, Toolbar, ToolbarItem, ToolbarSeparator, ToolbarGroup, ToolbarChoiceGroup, ToolbarPanelButton,
-    DockableWindow, StatusBar, Modal,
+    Menu, MainPanel, MultiPanelMenuTab, MultiPanelMenu, FullscreenMenu, FullscreenMenuNavTab,
+    FullscreenMenuPanel, TabsMenu, ShaderLayer, ShaderSideMenu, FloatingWindow, MainLayout,
+    Toast, MenuTabBanner, RightSideViewerMenu, NavigatorSideMenu, Explorer, Toolbar, ToolbarItem,
+    ToolbarSeparator, ToolbarGroup, ToolbarChoiceGroup, ToolbarPanelButton, DockableWindow, StatusBar, Modal,
 
-    // Services -> instantiated
     Services: new ServiceContainer(),
-    // Other
     Mixins: {
         VisibilityManager,
         Utilities: utils

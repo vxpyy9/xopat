@@ -47,7 +47,7 @@
         "faultyViz": "Invalid Data"
       },
       "shaders": {
-        "title": "Shaders Menu",
+        "title": "Visualization",
         "saveCookies": "Remember settings",
         "setBlending": "Set blending",
         "blendingExplain": "Toggle blending (default: mask)",
@@ -91,13 +91,14 @@
       "bar": {
         "pinFullscreen": "Pin to Fullscreen Menu",
         "copy": "Copy",
+        "edit": "Edit",
         "view": "View",
         "share": "Share",
         "exportUrl": "URL",
         "explainExportUrl": "Get the link without data",
         "exportFile": "Export",
         "explainExportFile": "Download together with plugins data",
-        "plugins": "Get plugins",
+        "plugins": "Plugins",
         "explainPlugins": "Add plugins to the visualization",
         "tutorials": "Tutorials",
         "explainTutorials": "Show tutorials",

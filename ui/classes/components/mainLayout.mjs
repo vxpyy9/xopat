@@ -68,7 +68,6 @@ export class MainLayout extends BaseComponent {
         this._menu = options.menu || null;
 
         this._shellEl = this._viewerEl = this._dockEl = this._handleEl = null;
-        this._onResize = () => this._applyResponsiveLayout();
         this._dockViewItemId = `${this.id}-global-menu`;
         this._dockViewTabCategory = "globalMenuTabs";
         this._dockRegisteredInView = false;
@@ -108,8 +107,6 @@ export class MainLayout extends BaseComponent {
                 this._dockedWrappers.set(normalized.id, normalized.wrapper);
             }
         }
-
-        window.addEventListener("resize", this._onResize, { passive: true });
     }
 
     /** ---- dynamic tab API ---- */
@@ -766,7 +763,7 @@ export class MainLayout extends BaseComponent {
         const osd = div({ id:"osd", style:"position: absolute; top: 0; left: 0; right: 0; bottom: 0; pointer-events:auto;", class:"grow relative w-full overflow-hidden" });
         const viewerWrap = div({ class:"relative flex-1" }, osd, new RawHtml(null, `<div id="fullscreen-menu" class="bg-base-100"></div>`).create());
 
-        const topSide = new Div({ id:"top-side" }, new RawHtml(null, `
+        const topSide = new Div({ id: "top-side-wrapper" }, new RawHtml(null, `
             <div id="top-side" class="flex-row w-full glass" style="display: flex; position: relative; align-items: flex-start; height: 35px; pointer-events: none;">
                 <div id="top-menus" class="flex flex-row w-full" style="justify-content: space-between;">
                     <div id="top-side-left" class="flex flex-row" style="align-items: center; pointer-events: auto;"></div>
@@ -796,7 +793,7 @@ export class MainLayout extends BaseComponent {
             menu.attachTo(this._dockEl);
         }
 
-        const handle = div({ id:`${this.id}-handle`, class:"w-1 hover:bg-base-300/50 cursor-col-resize" });
+        const handle = div({ id:`${this.id}-handle`, class:"w-1 hover:bg-base-300/50 hover:w-3 cursor-col-resize" });
         const dockNode = this._dockEl;
         const shell = div({ id:this.id, class:"absolute w-full h-full top-0 left-0 flex flex-row" },
             this.position === "left" ? [dockNode, handle, viewerWrap] : [viewerWrap, handle, dockNode]

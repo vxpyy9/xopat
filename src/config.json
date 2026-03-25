@@ -5,7 +5,8 @@
 { /**@lends xoEnv */
     /* General xOpat Metadata */
     "name": "xOpat",
-    "version": "2.2.2",
+    /* Version is overrideable on deployment level */
+    "version": null,
     /* Where xOpat redirects the user in case of error */
     "gateway": "../",
     /* Active configuration in the "client" */
@@ -154,7 +155,8 @@
         "disablePluginsUi": false,
         // Renders viewer in standalone mode, all data is static (leave as false if unsure)
         "isStaticPreview": false,
-        "historySize": 50
+        "historySize": 50,
+        "maxMobileWidthPx": 900
     },
     /**
      * The Server configuration. This object is here just for the reference and

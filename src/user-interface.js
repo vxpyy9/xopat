@@ -66,11 +66,10 @@ function initXOpatUI() {
         /**
          * Show custom/dialog window
          * todo consider renaming
-         * @param parentId unique ID of the dialog container, you can hide the window by removing this ID from DOM
-         *  might not complete or remove existing ID if not unique
-         * @param header HTML content to put in the header
-         * @param content HTML content
-         * @param footer HTML content to put to the footer
+         * @param parentId the ID of the plugin or module that attached this dialog
+         * @param header content to put in the header
+         * @param content content
+         * @param footer content to put to the footer
          * @param params
          * @param params.width custom width, can be a CSS value (string) or a number (pixels), by default it
          * @param params.isBlocking whether the dialog should block the user from interacting with the page, default true
@@ -88,7 +87,13 @@ function initXOpatUI() {
                 allowResize: params.allowResize ?? false,
             });
 
-            document.body.appendChild(modal.create());
+            const node = modal.create();
+            if (parentId) {
+                node.classList.add(parentId + "-plugin-root");
+            } else {
+                console.warn("Dialogs.showCustom() called without parent ID.");
+            }
+            document.body.appendChild(node);
             modal.open();
             return modal;
         },
@@ -384,7 +389,7 @@ aria-label="Close help" onclick="Dialogs.closeWindow('${id}')">
          */
         init: function() {
             document.addEventListener("click", this._toggle.bind(this, undefined, undefined));
-            $("body").append(`<ul id="drop-down-menu" oncontextmenu="return false;" style="display:none;width: auto; max-width: 300px;" class="menu menu-sm bg-base-100 rounded-box shadow"></ul>`);
+            $("body").append(`<ul id="drop-down-menu" oncontextmenu="return false;" style="display:none;width: auto; max-width: 300px; z-index: 999999999; position: fixed;" class="menu menu-sm bg-base-100 rounded-box shadow"></ul>`);
 
             this._body = $("#drop-down-menu");
         },
@@ -601,226 +606,43 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
 
         //setup component in config.json -> can be added in URL, important setting such as removed cookies, theme etc -> can be set from outside
         FullscreenMenu: {
-            context: $("#fullscreen-menu"),
-            menu: "",
-
-            init: function () {
-                this.menu = new UI.FullscreenMenu({
-                    id: "fullscreen-menu",
-                },this.getSettingsBody(), this.getPluginsBody()
-            );
-
-                this.menu.attachTo(this.context);
+            get context() {
+                return UI.Services.FullscreenMenus.context;
             },
-
+            get menu() {
+                return UI.Services.FullscreenMenus.menu;
+            },
+            init: function () {
+                const ctx = $("#fullscreen-menu")[0] || document.getElementById("fullscreen-menu") || document.body;
+                UI.Services.FullscreenMenus.init(ctx);
+                return UI.Services.FullscreenMenus.menu;
+            },
+            focus(id) {
+                return UI.Services.FullscreenMenus.focus(id);
+            },
+            open(id = undefined) {
+                return UI.Services.FullscreenMenus.open(id);
+            },
+            close() {
+                return UI.Services.FullscreenMenus.close();
+            },
+            setOrientation(orientation) {
+                return UI.Services.FullscreenMenus.setOrientation(orientation);
+            },
             getSettingsBody: function () {
-                const { div, span, a, b } = van.tags;
-                const logo = this.getLogo(-70, 20);
-
-                const notification = div({ class: "", style: "width: inherit; visibility: hidden;", id: "settings-notification" },
-                    div({ class: "py-1 px-2 rounded-2", style: "background: var(--color-bg-warning); max-height: 70px; text-overflow: ellipsis;" },
-                      span({ class: "fa-auto fa-warning", style: "font-size: initial; color: var( --color-icon-warning)" }),
-                      "To apply changes, please ",
-                      a({ onclick: () => {UTILITIES.refreshPage()}, class: "pointer" },
-                        b("reload the page"),
-                      ),
-                      ".",
-                    ),
-                  );
-
-                let theme = APPLICATION_CONTEXT.getOption("theme");
-                let themePretty = theme === "auto" ? "Automatic" : theme === "light" ? "Light Theme" : "Dark Theme";
-
-                const themeSelect = new UI.Select(
-                    { id: "theme-select", onchange: function () {USER_INTERFACE.Tools.changeTheme(this.value)}, title: $.t('settings.theme.title') },
-                    { value: "", selected: "selected", hidden: "hidden", text: themePretty },
-                    { value: "auto", text: $.t('settings.theme.auto') },
-                    { value: "light", text: $.t('settings.theme.light') },
-                    { value: "dark", text: $.t('settings.theme.dark') }
-                );
-                const settings = div(
-                  div({ class: "boxed"},
-                    span({ class: "f3-light" },
-                    "Appearance"),
-                  themeSelect.create(),
-                  this.createCheckbox(
-                    "toolbar-checkbox",
-                    $.t('settings.toolBar'),
-                    function () {
-                        APPLICATION_CONTEXT.setOption('toolBar', this.checked);
-                        const toolbarDivs = document.querySelectorAll('div[id^="toolbar-"]');
-                        toolbarDivs.forEach(div => div.classList.toggle('hidden'));
-                    },
-                    APPLICATION_CONTEXT.getOption('toolBar', true)),
-
-                  this.createCheckbox(
-                    "scalebar-checkbox",
-                      $.t('settings.scaleBar'),
-                    function () {
-                        APPLICATION_CONTEXT.setOption('scaleBar', this.checked);
-                        for (let viewer of VIEWER_MANAGER.viewers) {
-                            viewer.scalebar.setActive(this.checked);
-                        }
-                    },
-                    APPLICATION_CONTEXT.getOption('scaleBar', true)),
-
-                  this.createCheckbox(
-                    "statusbar-checkbox",
-                    $.t('settings.statusBar'),
-                    function () {APPLICATION_CONTEXT.setOption('statusBar', this.checked);$('#viewer-status-bar').toggleClass('hidden')},
-                    APPLICATION_CONTEXT.getOption('statusBar', true)),
-                  ),
-                  div({ class: "boxed"},
-                  span({ class: "f3-light" }, "Behaviour", ),
-                  this.createCheckbox(
-                    "cookies-checkbox",
-                    $.t('settings.cookies'),
-                    function () {APPLICATION_CONTEXT.setOption('bypassCookies', this.checked);$('#settings-notification').css('visibility', 'visible');},
-                    APPLICATION_CONTEXT.getOption('bypassCookies', false)),
-                  ),
-                  div({ class: "boxed"},
-                  span({ class: "f3-light" }, "Other", ),
-                  this.createCheckbox(
-                    "debug-checkbox",
-                    $.t('settings.debugMode'),
-                    function () {APPLICATION_CONTEXT.setOption('debugMode', this.checked);$('#settings-notification').css('visibility', 'visible');},
-                    APPLICATION_CONTEXT.getOption('debugMode', false)),
-                  this.createCheckbox(
-                    "render-checkbox",
-                    $.t('settings.debugRender'),
-                    function () {APPLICATION_CONTEXT.setOption('webglDebugMode', this.checked);$('#settings-notification').css('visibility', 'visible');},
-                    APPLICATION_CONTEXT.getOption('webglDebugMode', false)),
-                  ),
-                );
-                return new UI.Div({id: "settings-menu"}, settings, notification, logo);
+                return UI.Services.FullscreenMenus.getSettingsBody;
             },
             createCheckbox: function (id, text, onchangeFunction, checked) {
-                const cb = new UI.Checkbox({
-                    id: id,
-                    label: text,
-                    checked: checked,
-                    onchange: onchangeFunction
-                    });
-                return cb.create();
+                return UI.Services.FullscreenMenus.createCheckbox(id, text, onchangeFunction, checked);
             },
-
             getLogo(positionBottom, positionRight) {
-                const { path, svg } = van.tags("http://www.w3.org/2000/svg");
-                const {span, div} = van.tags();
-                const logo = div(svg({width: "199", height: "245", style: `transform: scale(0.4);position: absolute; bottom: ${positionBottom}px; right: ${positionRight}px;`},
-                    path({ class: "svg-bg", style: "stroke:none;", "d": "M0 0L0 245L199 245L199 0L0 0z" }),
-                    path({ class: "svg-fg", style: "stroke:none;", "d": "M89 111C73.9124 102.634 59.1429 97.6265 42 103.699C10.6243 114.813 2.69417 155.943 24.3002 179.96C34.203 190.968 50.5908 195.588 65 193.711C70.1356 193.042 75.9957 189.366 81 189.558C85.6821 189.737 88.2317 195.201 93 196C93.6192 189.998 96.2022 186.738 102 185C101.099 181.757 97.6293 178.671 97.4406 175.424C97.0265 168.299 104.601 159.133 104.961 151C105.566 137.299 101.021 127.388 94 116C103.473 126.386 108.99 140.925 106.192 155C105.004 160.979 97.5869 171.328 100.07 177C104.64 187.436 131.355 202.006 122.296 214.956C118.441 220.467 108.201 223.195 105.353 214.981C103.302 209.066 108.098 199.867 106.772 193.044C105.706 187.562 98.7536 186.737 96.6034 192.059C95.3591 195.138 96.3032 198.787 95.6096 202C93.7875 210.441 87.5887 218.272 93.1481 226.96C100.503 238.454 121.175 235.504 129.532 226.699C134.728 221.225 136.419 213.299 137 206C148.187 205.48 157.471 186.148 144 184C149.507 175.759 148.085 167.119 146 158C165.247 156.32 202.562 125.778 177.895 106.649C169.278 99.9665 160.337 105.127 151 105C150.495 106.972 149.914 108.958 149.8 111.005C148.665 131.435 167.128 107.828 171.492 118.769C173.408 123.575 166.473 129.073 162.996 131.031C153.73 136.249 134.573 138.898 129.935 126.999C126.675 118.636 137.585 104.308 140.586 96C151.593 65.5361 152.007 31.5748 117 17.3125C83.7906 3.78271 48.8156 25.7805 54.3009 63C56.0017 74.5404 65.351 92.3288 73.5285 100.61C77.7937 104.929 84.2977 107.003 89 111z" }),
-                    path({ class: "svg-bg", style: "stroke:none;", "d": "M87 81C82.7429 86.9183 82.9719 101.042 92.9992 101.573C102.597 102.082 97.7793 90.6547 93.9707 87.3356C91.5984 85.2683 89.3865 83.0401 87 81z" }),
-                    path({ class: "svg-fg", style: "stroke:none;", "d": "M25 107C28.4168 108.639 36.7081 108.003 35.2485 102.053C32.9817 92.813 14.0022 92.0537 12.2292 102.001C10.2409 113.156 24.252 120.615 25 107z" }),
-                    path({ class: "svg-bg", style: "stroke:none;", "d": "M24 106L25 107L24 106M41 112L41 113L71 111C61.6203 105.271 50.5737 108.886 41 112M72 111C69.2728 118.884 75.1667 125.759 78 116C82.7507 118.31 82.8217 121.271 84 126C89.7642 124.306 91.6704 129.152 93.5332 134C96.6031 141.99 98.7543 158.938 90 164L90 160C85.0423 161.665 89.4999 169.66 84.544 174.661C75.5048 183.782 64.9634 184.722 53 186C66.228 191.551 84.5771 179.617 91.4522 169C104.514 148.829 96.2262 118.129 72 111M89 111L94 116L89 111M39 113L40 114L39 113M33 117L25 127C29.7771 124.795 32.8399 122.639 33 117M52.3133 120.341C50.1733 121.228 51.5478 124.545 53.6867 123.659C55.8267 122.772 54.4522 119.455 52.3133 120.341M62 120L65 122L62 120M41 121L42 122L41 121M67 125L68 126L67 125M43.1042 126.971C38.678 128.103 40.3704 135.157 44.8704 134.029C49.2486 132.932 47.4587 125.857 43.1042 126.971M24 128L25 129L24 128M23 130L24 131L23 130M22 132L21 136L22 136L22 132M28 133L28 135L30 135L30 133L28 133M58 133L58 135L60 135L60 133L58 133M77 134L77 137L80 136L80 135L77 134M34 135L35 136L34 135M20 137L20 141L21 141L20 137M65 143C70.0573 137.901 61.7582 136.163 65 143M42 139L41 142L44 140L42 139M81 140C78.2033 148.267 88.8914 143.178 81 140M49.3673 142.16C47.4628 143.252 48.6193 146.328 50.7762 145.543C53.2608 144.64 51.7806 140.778 49.3673 142.16M19 142L24 167L25 167L23 147L19 142M25 143L26 144L25 143M34.6173 144.067C32.5698 145.655 35.2824 148.445 37.1682 146.933C39.1479 145.345 36.5347 142.581 34.6173 144.067M90 146L91 147L90 146M73 148L73 149L76 150L76 147L73 148M54 150L55 151L57 148L54 150M86 149L85 152L88 152L86 149M62 153L63 154L62 153M70.3179 155.086C66.5598 157.256 69.924 163.083 73.6821 160.914C77.4401 158.744 74.076 152.917 70.3179 155.086M31.3133 156.341C29.1733 157.228 30.5478 160.545 32.6867 159.659C34.8267 158.772 33.4522 155.455 31.3133 156.341M45 159L45 161L47 161L47 159L45 159M52 164C60.0885 166.742 55.1245 156.194 52 164M39.0154 163.176C34.2531 163.787 35.2278 171.226 39.9815 170.168C44.31 169.205 43.5061 162.6 39.0154 163.176M78 164L79 165L78 164M65 166L66 167L65 166M25 168L31 175L31 167L25 168M69 169C74.0987 174.057 75.8373 165.758 69 169M58 169L58 171L60 171L60 169L58 169M79 170L82 172L79 170M114.333 171.133C108.852 174.188 119.144 185.977 123.485 183.824C130.12 180.534 120.016 167.965 114.333 171.133M43.6667 174.333L44.3333 174.667L43.6667 174.333M50 174L49 177L52 175L50 174M32 176L34 178L32 176M63 177C55.3047 179.36 63.7044 185.094 63 177M72 177L73 178L72 177M35 178L37 180L35 178M39 181L39 182L42 183L42 180L39 181M43.6667 183.333L44.3333 183.667L43.6667 183.333M46 184L47 185L46 184M48 185L48 186L52 186L48 185z" }),
-                    path({ class: "svg-fg", style: "stroke:none;", "d": "M27 186C27.1738 206.718 48.5297 212.444 66 208.251C71.6215 206.901 85.3117 202.123 84.0826 194.148C83.4123 189.799 77.5387 191.717 75 192.59C66.8687 195.388 53.4275 198.698 45 195.481C38.5131 193.004 34.1307 187.375 27 186z" }),
-                    path({ class: "svg-bg", style: "stroke:none;", "d": "M138 189L135 195C137.756 193.487 139.001 192.137 138 189z" }),
-                    path({ class: "svg-fg", style: "stroke:none;", "d": "M111 196C110.984 201.944 107.113 208.424 107.581 213.867C108.017 218.936 115.737 218.201 118.606 215.991C126.648 209.793 118.205 198.065 111 196z" }),
-                ),
-            span({ class: "f3-light text-shadow", style: `position: absolute; bottom: ${positionBottom+125}px; right: ${positionRight+34}px;` }, "xOpat"),
-            span({ class: "f3-light text-shadow", style: `position: absolute; bottom: ${positionBottom+108}px; right: ${positionRight+21}px;` }, "Viewer"),
-            span({ class: "f6", style: `position: absolute; bottom: ${positionBottom+143}px;right: ${positionRight+20}px;` }, "v2.1.1"),
-            );
-            return logo;
+                return UI.Services.FullscreenMenus.getLogo(positionBottom, positionRight);
             },
             getPluginsBody: function () {
-                const { button, div, span} = van.tags;
-                let pluginCount = 0;
-                let pluginDivs = [];
-                for (let pid of APPLICATION_CONTEXT.pluginIds()) {
-                    //todo maybe avoid using _dangerously* ?
-                    let plugin = APPLICATION_CONTEXT._dangerouslyAccessPlugin(pid),
-                        pluginConfig = APPLICATION_CONTEXT.config.plugins[pid];
-
-                    //permaLoad plugins are not available for interaction
-                    if ((plugin.hasOwnProperty("permaLoad") && plugin.permaLoad) ||
-                        (plugin.hasOwnProperty("hidden") && plugin.hidden) ||
-                        (pluginConfig?.hasOwnProperty("permaLoad") && pluginConfig?.permaLoad)) continue;
-
-                    const pluginDiv = this.createPluginDiv(plugin, pluginCount);
-                    pluginDivs.push(pluginDiv);
-                    pluginCount++;
-                }
-
-                if (pluginCount < 1) {
-                    let emptyPlugin = {
-                        id: "_undefined_",
-                        name: $.t('plugins.noPluginsAvailable'),
-                        description: $.t('plugins.noPluginsDetails'),
-                        icon: null,
-                        error: false,
-                        loaded: false,
-                    }
-                    const pluginDiv = this.createPluginDiv(emptyPlugin, 0);
-                    pluginDivs.push(pluginDiv);
-                }
-
-
-                const logo = this.getLogo(-70, 20);
-                return new UI.Div({
-                        id: "app-plugins",
-                        class: "height-full position-relative",
-                        style: "margin-left: 10px; margin-right: 20px; max-width: 690px; width: calc(100vw - 65px);"
-                    },
-                    div({class: "flex flex-col-reverse"},
-                        button({
-                            onclick: function () {
-                                USER_INTERFACE.AppBar.Plugins.refreshPageWithSelectedPlugins()
-                            }, class: "btn"
-                        }, "Load with selected"),
-                    ),
-                    span({class: "text-xl font-semibold", style: "margin-top: 5px; margin-bottom: 5px"}, "Plugins"),
-                    div({id: "plug-list-content-inner", class: "boxed"},
-                        div({id: "plug-list-content-inner-content"}, ...pluginDivs),
-                    ),
-                    logo,
-                );
-
-            },
-
-            createPluginDiv: function (plugin, pluginCount) {
-                const { div, img, button, input } = van.tags;
-                let actionPart;
-                if (plugin.loaded){
-                    actionPart = div({ id: `load-plugin-${plugin.id}` },
-                        button({class: "btn btn-disabled" },
-                            $.t('common.Loaded')
-                        )
-                    )
-                } else{
-                    actionPart = div({ id: `load-plugin-${plugin.id}` },
-                        button({ onclick: function () {UTILITIES.loadPlugin(plugin.id); return false;}, class: "btn" },
-                            `${$.t('common.Load')}`,
-                        ),
-                    );
-                }
-
-                let icon = plugin.icon || (plugin.icon !== "" ? APPLICATION_CONTEXT.url + "src/assets/image.png" : "");
-                if (icon && !icon.includes('<')) {
-                    icon = img({ src: `${icon}`, class: "block m-2 rounded-md", style: "height: 40px;" });
-                }
-
-                let text = div({ class: "flex flex-col", style: "flex-grow: 1;" },
-                    div({ class: "text-lg font-semibold" }, plugin.name || plugin.id),
-                    div({ class: "text-sm opacity-70" }, plugin.description),
-                );
-
-                return div({ id: `plug-list-content-inner-row-${pluginCount}`, class: `selectable-image-row-container plugin-${plugin.id}-root` },
-                    input({ type: "checkbox", name: "plug-list-content", class: "hidden selectable-image-row-context", value: plugin.id }),
-                    div({ class: "w-full flex selectable-image-row rounded-md cursor-pointer", onclick: function () {$(this.previousElementSibling).click()} },
-                        icon,
-                        text,
-                        actionPart
-                    ),
-                    div({ id: `error-plugin-${plugin.id}`, class: "mx-2 mb-3 text-small" }),
-                );
-            },
+                return UI.Services.FullscreenMenus.getPluginsBody;
+            }
         },
 
-        /**
-         * Application Top Middle Menu
-         * @namespace USER_INTERFACE.AppBar
-         */
         AppBar: UI.Services.AppBar,
 
         /**
@@ -1161,8 +983,8 @@ ${label}
         clearTimeout(resizeTimer);
         resizeTimer = setTimeout(() => {
             // todo, either use window events directly, or convert to the openseadragon event system!
-            window.dispatchEvent(new CustomEvent('app:layout-change', { 
-                detail: { width: window.innerWidth } 
+            window.dispatchEvent(new CustomEvent('app:layout-change', {
+                detail: { width: window.innerWidth }
             }));
         }, 200);
     });

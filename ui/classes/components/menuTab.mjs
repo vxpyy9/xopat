@@ -79,10 +79,16 @@ class MenuTab extends BaseComponent {
 
         let c = undefined;
         if (content) {
-            if (typeof content !== 'string' && typeof content?.[Symbol.iterator] === 'function') {
-                c = new Div({ id: this.parent.id + "-c-" + item.id, extraClasses: {display: "display-none", height: "h-full"}}, ...content);
+            const options = {
+                id: this.parent.id + "-c-" + item.id,
+                extraClasses: { display: "display-none", height: "h-full" }
+            };
+
+            if (typeof content !== "string" && typeof content?.[Symbol.iterator] === "function") {
+                c = new Div(options, ...content);
+            } else {
+                c = new Div(options, content);
             }
-            c = new Div({ id: this.parent.id + "-c-" + item.id, extraClasses: {display: "display-none", height: "h-full"} }, content);
         }
         return [b, c];
     }
@@ -140,7 +146,7 @@ class MenuTab extends BaseComponent {
 
     _removeFocus() {
         this._focused = false;
-        this.headerButton?.setClass("type", "btn-neutral");
+        this.headerButton?.setClass("type", "");
         if (this.contentDiv){
             this.contentDiv.setClass("display", "hidden");
         }

@@ -31,7 +31,15 @@ export class AppBar {
                 extraClasses: { width: "min-w-max" },
                 onClick: e => this.View._refreshVisualDropdown()
             }, {
-                id: "plugins", icon: "fa-bars", title: $.t('main.bar.plugins'),
+                id: "edit",
+                icon: "fa-bars",
+                title: $.t('main.bar.edit'),
+                body: [],
+                class: Dropdown,
+                extraClasses: { width: "min-w-max" },
+                onClick: e => this.Edit.refresh(true)
+            }, {
+                id: "plugins", icon: "fa-puzzle-piece", title: $.t('main.bar.plugins'),
                 body: [], class: Dropdown
             }
         );
@@ -60,7 +68,7 @@ export class AppBar {
                 extraClasses: { bg: "bg-transparent" }
             },
             { id: "banner", icon: "fa-warning", title: "Banner", body: undefined, class: MenuTabBanner },
-            { id: "settings", icon: "fa-gear", title: $.t('main.bar.settings'), body: undefined, onClick: function () {USER_INTERFACE.FullscreenMenu.menu.focus("settings-menu")} },
+            { id: "settings", icon: "fa-gear", title: $.t('main.bar.settings'), body: undefined, onClick: function () {UI.Services.FullscreenMenus.focus("settings-menu")} },
             { id: "tutorial", icon: "fa-graduation-cap", title: $.t('main.bar.tutorials'), body: undefined, onClick: function () {USER_INTERFACE.Tutorials.show();} },
             { id: "share", icon: "fa-share-nodes", title: $.t('main.bar.share'), items: [
                     {
@@ -129,6 +137,7 @@ export class AppBar {
 
         // init submenus
         this.View.init(this.menu.getTab("view"));
+        this.Edit.init(this.menu.getTab("edit"));
         this.Plugins.init(this.menu.getTab("plugins"));
     }
 
@@ -167,7 +176,7 @@ export class AppBar {
         init(subMenu) {
             this.subMenu = subMenu;
             this.subMenu.addItem({ id: "banner", icon: "fa-warning", label: "Banner", body: undefined, class: MenuTabBanner })
-            this.subMenu.addItem({ id: "settings", icon: "fa-gear", label: $.t('main.bar.settings'), body: undefined, onClick: function () {USER_INTERFACE.FullscreenMenu.menu.focus("settings-menu")} })
+            this.subMenu.addItem({ id: "settings", icon: "fa-gear", label: $.t('main.bar.settings'), body: undefined, onClick: function () {UI.Services.FullscreenMenus.focus("settings-menu")} })
             this.subMenu.addItem({ id: "tutorial", icon: "fa-graduation-cap", label: $.t('main.bar.tutorials'), body: undefined, onClick: function () {USER_INTERFACE.Tutorials.show();} });
             this.subMenu.addItem({
                 id: 'share',
@@ -396,6 +405,59 @@ export class AppBar {
         },
     }
 
+    Edit = {
+        init(subMenu) {
+            this.subMenu = subMenu;
+
+            this.subMenu.addItem({
+                id: 'history-undo',
+                icon: 'fa-rotate-left',
+                label: $.t('main.bar.undo'),
+                disabled: true,
+                onClick: () => {
+                    const history = APPLICATION_CONTEXT.history;
+                    if (!history?.canUndo?.()) return true;
+                    history.undo();
+                    return true;
+                }
+            });
+
+            this.subMenu.addItem({
+                id: 'history-redo',
+                icon: 'fa-rotate-right',
+                label: $.t('main.bar.redo'),
+                disabled: true,
+                onClick: () => {
+                    const history = APPLICATION_CONTEXT.history;
+                    if (!history?.canRedo?.()) return true;
+                    history.redo();
+                    return true;
+                }
+            });
+
+            const history = APPLICATION_CONTEXT.history;
+            if (history?.addHandler) {
+                const deferredRefresh = () => queueMicrotask(() => this.refresh());
+
+                history.addHandler('push', deferredRefresh);
+                history.addHandler('undo', deferredRefresh);
+                history.addHandler('redo', deferredRefresh);
+                history.addHandler('register-provider', deferredRefresh);
+                history.addHandler('change-size', deferredRefresh);
+            }
+
+            this.refresh();
+        },
+
+        refresh() {
+            const history = APPLICATION_CONTEXT.history;
+            const canUndo = !!history?.canUndo?.();
+            const canRedo = !!history?.canRedo?.();
+
+            this.subMenu.setItemDisabled('history-undo', !canUndo);
+            this.subMenu.setItemDisabled('history-redo', !canRedo);
+        }
+    }
 
     Plugins = {
         init(subMenu) {
@@ -404,7 +466,7 @@ export class AppBar {
                 id: 'plugins',
                 icon: "fa-puzzle-piece",
                 label: $.t('main.bar.plugins'),
-                onClick: function () {USER_INTERFACE.FullscreenMenu.menu.focus("app-plugins")}
+                onClick: function () {UI.Services.FullscreenMenus.focus("app-plugins")}
             });
             this.subMenu.addSection({
                 id: 'plugin-list',
@@ -423,38 +485,12 @@ export class AppBar {
                     onClick: () => this.openSubmenu(`${ownerPluginId}`),
                     section: 'plugin-list'
                 });
-
-                const insideMenu = new TabsMenu({
-                    id: `${ownerPluginId}-submenu`,
-                    orientation: Menu.ORIENTATION.TOP,
-                    buttonSide: Menu.BUTTONSIDE.LEFT,
-                    rounded: Menu.ROUNDED.ENABLE,
-                    extraClasses: {bg: "bg-transparent"}
-                },);
-
-                const d = new Div({
-                    id: `${ownerPluginId}-menu`,
-                    extraClasses: `flex flex-col plugin-${ownerPluginId}-root`
-                }, insideMenu);
-
-                USER_INTERFACE.FullscreenMenu.menu.addTab(d);
             }
 
-            const insideMenu = USER_INTERFACE.FullscreenMenu.menu.tabs[`${ownerPluginId}-menu`]._children[0];
-            const d = van.tags.div();
-            d.innerHTML = html;
-            insideMenu.addTab({id: toolsMenuId, icon: icon, title: title, body: [d]});
-
+            UI.Services.FullscreenMenus.setMenu(ownerPluginId, toolsMenuId, title, html, icon);
         },
         openSubmenu(atPluginId, atSubId = undefined, toggle = true) {
-            // TODO move to mainPanel class and solve toggle
-            USER_INTERFACE.FullscreenMenu.menu.focus(`${atPluginId}-menu`);
-
-            // todo dirty toggling redesign
-            if (USER_INTERFACE.FullscreenMenu.menu.tabs[`${atPluginId}-menu`]._children[0].focused === undefined && atSubId === undefined) {
-                const stTabId = Object.keys(USER_INTERFACE.FullscreenMenu.menu.tabs[`${atPluginId}-menu`]._children[0].tabs)[0];
-                USER_INTERFACE.FullscreenMenu.menu.tabs[`${atPluginId}-menu`]._children[0].focus(stTabId);
-            }
+            return UI.Services.FullscreenMenus.openSubmenu(atPluginId, atSubId);
         }
     }
     onLayoutChange(details) {

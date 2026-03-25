@@ -867,13 +867,21 @@ export class Explorer extends BaseComponent {
     }
 
     reconfigure({ levels, search = "" } = {}) {
-        if (levels && Array.isArray(levels)) {
+        if (Array.isArray(levels)) {
             this.levels = levels.slice();
+        } else if (typeof levels === "object" && levels !== null) {
+            this.levels = {
+                isDynamic: true,
+                level: levels,
+            };
+        } else {
+            this.levels = [];
         }
+
         this._search = (typeof search === "string" ? search : "");
         this._path = [];
         this._store.clear();
-        this._viewState.clear(); // ⬅️ reset remembered pages when reconfiguring
+        this._viewState.clear();
         this._loadAndRender(0, { replace: true });
     }
 

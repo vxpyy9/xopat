@@ -393,6 +393,30 @@ export function initXOpat(PLUGINS: Record<string, XOpatElementItem>, MODULES: Re
         activeVisualizationConfig() {
             return CONFIG.visualizations?.[APPLICATION_CONTEXT.getOption("activeVisualizationIndex", undefined, true, true)[0]];
         },
+        /**
+         * Get the viewer currently considered active by the viewer manager.
+         */
+        activeViewer() {
+            return window.VIEWER_MANAGER?.get?.() || null;
+        },
+        /**
+         * Get index of the viewer currently considered active by the viewer manager.
+         */
+        activeViewerIndex() {
+            return window.VIEWER_MANAGER?.getActiveIndex?.() ?? -1;
+        },
+        /**
+         * Get unique ID of the viewer currently considered active by the viewer manager.
+         */
+        activeViewerId() {
+            return window.VIEWER_MANAGER?.getActiveUniqueId?.();
+        },
+        /**
+         * Check if a viewer reference resolves to the currently active viewer.
+         */
+        isActiveViewer(viewerOrUniqueId: ViewerLikeItem) {
+            return !!window.VIEWER_MANAGER?.isActive?.(viewerOrUniqueId);
+        },
         _dangerouslyAccessConfig() {
             //remove in the future?
             return CONFIG;
@@ -447,10 +471,7 @@ export function initXOpat(PLUGINS: Record<string, XOpatElementItem>, MODULES: Re
         id: "viewer-container",
         position: "right",
         initialWidth: 360,
-        // tabs: [
-        //     { id: "layers", icon: "fa-layer-group", title: "Layers", body: ["…"] },
-        //     { id: "measure", icon: "fa-ruler",       title: "Measure", body: ["…"] }
-        // ]
+        collapseBreakpointPx: APPLICATION_CONTEXT.getOption("maxMobileWidthPx", null),
     });
     // Attach once (replaces your static HTML wrapper)
     (window.LAYOUT as any).attachTo(document.getElementById("middle-container"));
@@ -770,6 +791,23 @@ export function initXOpat(PLUGINS: Record<string, XOpatElementItem>, MODULES: Re
             return getGoal(bgIndices as number);
         };
 
+        const normalizeStoredBackgroundSelection = (value: any): number[] | undefined => {
+            if (value == null) return undefined;
+            if (Array.isArray(value)) {
+                const filtered = value.filter((v: any) => Number.isInteger(v));
+                return filtered.length > 0 ? filtered : undefined;
+            }
+            return Number.isInteger(value) ? [value] : undefined;
+        };
+
+        const normalizeStoredVisualizationSelection = (value: any): Array<number | undefined> | undefined => {
+            if (value == null) return undefined;
+            if (Array.isArray(value)) {
+                return value.map((v: any) => Number.isInteger(v) ? v : undefined);
+            }
+            return Number.isInteger(value) ? [value] : undefined;
+        };
+
         let updated = false;
 
         // ---------- Handle bgSpec (null => erase; undefined => keep; value => set) ----------
@@ -780,12 +818,15 @@ export function initXOpat(PLUGINS: Record<string, XOpatElementItem>, MODULES: Re
             effectiveBg = undefined;
         } else if (bgSpec !== undefined) {
             const newActiveBg = selectBackgroundIndices(bgSpec, backgrounds.length);
-            const prevActiveBg = APPLICATION_CONTEXT.getOption("activeBackgroundIndex", undefined, true, false);
-            if (prevActiveBg !== JSON.stringify(newActiveBg)) {
-                APPLICATION_CONTEXT.setOption("activeBackgroundIndex", newActiveBg);
+            const normalizedActiveBg = normalizeStoredBackgroundSelection(newActiveBg);
+            const prevActiveBg = normalizeStoredBackgroundSelection(
+                APPLICATION_CONTEXT.getOption("activeBackgroundIndex", undefined, true, true)
+            );
+            if (JSON.stringify(prevActiveBg) !== JSON.stringify(normalizedActiveBg)) {
+                APPLICATION_CONTEXT.setOption("activeBackgroundIndex", normalizedActiveBg);
                 updated = true;
             }
-            effectiveBg = newActiveBg;
+            effectiveBg = normalizedActiveBg;
         }
 
         // Always have a convenient array view of selected backgrounds
@@ -813,11 +854,15 @@ export function initXOpat(PLUGINS: Record<string, XOpatElementItem>, MODULES: Re
             } // else: vizSpec === undefined and derive flag is false => keep existing option
 
             if (typeof desiredActiveVis !== "undefined") {
-                const prevActiveVis = APPLICATION_CONTEXT.getOption("activeVisualizationIndex", undefined, true, false);
-                if (prevActiveVis !== JSON.stringify(desiredActiveVis)) {
-                    APPLICATION_CONTEXT.setOption("activeVisualizationIndex", desiredActiveVis);
+                const normalizedActiveVis = normalizeStoredVisualizationSelection(desiredActiveVis);
+                const prevActiveVis = normalizeStoredVisualizationSelection(
+                    APPLICATION_CONTEXT.getOption("activeVisualizationIndex", undefined, true, true)
+                );
+                if (JSON.stringify(prevActiveVis) !== JSON.stringify(normalizedActiveVis)) {
+                    APPLICATION_CONTEXT.setOption("activeVisualizationIndex", normalizedActiveVis);
                     updated = true;
                 }
+                desiredActiveVis = normalizedActiveVis;
 
                 // Persist per-background goalIndex when we have a concrete desiredActiveVis
                 if (selectedBgArray.length > 0) {
@@ -1126,8 +1171,8 @@ export function initXOpat(PLUGINS: Record<string, XOpatElementItem>, MODULES: Re
      * @returns {Promise<void>}
      */
     APPLICATION_CONTEXT.beginApplicationLifecycle = async function (data,
-        background: BackgroundItem[] | BackgroundConfig[] | undefined,
-        visualizations: VisualizationItem[] | undefined = undefined) {
+                                                                    background: BackgroundItem[] | BackgroundConfig[] | undefined,
+                                                                    visualizations: VisualizationItem[] | undefined = undefined) {
         try {
             initXOpatLayers();
 
@@ -1669,9 +1714,10 @@ export function initXOpat(PLUGINS: Record<string, XOpatElementItem>, MODULES: Re
             }
 
             clearTimeout(loadTooLongTimeout);
-            USER_INTERFACE.Loading.show(false);
-            // todo: maybe dont do this, only if no active viewer is set
-            VM.setActive(0);
+            // Keep the manager-selected viewer unless nothing is active yet.
+            if (!VM.get() && VM.viewers.length > 0) {
+                VM.setActive(0, 'open-complete');
+            }
             // todo a bit ugly, fix later
             setTimeout(() => {
                 const vv = VM.viewers[VM.viewers.length - 1];
@@ -1683,25 +1729,41 @@ export function initXOpat(PLUGINS: Record<string, XOpatElementItem>, MODULES: Re
                     VIEWER_MANAGER.raiseEvent('after-open');
                 }
             });
+            UTILITIES.syncOpenedViewersToSession();
             UTILITIES.syncSessionToUrl(false);
+            USER_INTERFACE.Loading.show(false);
             console.log("Open done:", e);
             if (USER_INTERFACE.Errors.active) {
                 $("#viewer-container").addClass("disabled"); //preventive
             }
             //todo make sure bypassCache and bypassCookies is set to true if this option is true - temporarily
             APPLICATION_CONTEXT.setOption("bypassCacheLoadTime", false);
+        }).catch(e => {
+            clearTimeout(loadTooLongTimeout);
+            console.error("Failed to open viewer items", e);
+            USER_INTERFACE.Loading.show(false);
+            Dialogs.show($.t("error.slide.failed"), 15000, Dialogs.MSG_ERROR);
         });
         return true;
-    }
+    };
 
     function checkLocalState() {
-        const data = sessionStorage.getItem('__xopat_session__');
-        sessionStorage.removeItem('__xopat_session__');
+        const sessionStateKey = '__xopat_session__';
+
+        // Explicit session data in the URL should always win over any tab-local snapshot.
+        // When this happens, drop the cached snapshot so it does not override intentional links.
+        if (window.location.hash && window.location.hash.length > 1) {
+            sessionStorage.removeItem(sessionStateKey);
+            return null;
+        }
+
+        const data = sessionStorage.getItem(sessionStateKey);
         if (data) {
             try {
                 return JSON.parse(data);
             } catch (e) {
                 console.debug("Failed to restore session!", e);
+                sessionStorage.removeItem(sessionStateKey);
             }
         }
         return null;
@@ -1826,7 +1888,7 @@ export function initXOpat(PLUGINS: Record<string, XOpatElementItem>, MODULES: Re
         }
     };
 
-    const XOpatHistory = class XOpatHistory {
+    const XOpatHistory = class XOpatHistory extends OpenSeadragon.EventSource {
         _buffer: Array<{ forward: () => any; backward: () => void } | null>;
         _buffidx: number;
         _lastValidIndex: number;
@@ -1834,6 +1896,7 @@ export function initXOpat(PLUGINS: Record<string, XOpatElementItem>, MODULES: Re
         BUFFER_LENGTH: number;
 
         constructor(size = 99) {
+            super();
             this._buffer = [];
             // points to the current state in the redo/undo index in circular buffer
             this._buffidx = -1;
@@ -1851,6 +1914,7 @@ export function initXOpat(PLUGINS: Record<string, XOpatElementItem>, MODULES: Re
          */
         registerProvider(provider: HistoryProvider) {
             this._providers.push(provider);
+            this.raiseEvent('register-provider', { provider });
         }
 
         /**
@@ -1859,6 +1923,7 @@ export function initXOpat(PLUGINS: Record<string, XOpatElementItem>, MODULES: Re
          */
         set size(value: number) {
             this.BUFFER_LENGTH = Math.max(2, value);
+            this.raiseEvent('change-size', { size: value });
         }
 
         /**
@@ -1876,7 +1941,7 @@ export function initXOpat(PLUGINS: Record<string, XOpatElementItem>, MODULES: Re
             this._buffidx = (this._buffidx + 1) % this.BUFFER_LENGTH;
             this._buffer[this._buffidx] = { forward, backward };
             this._lastValidIndex = this._buffidx;
-
+            this.raiseEvent('push');
             return forward();
         }
 
@@ -1887,7 +1952,10 @@ export function initXOpat(PLUGINS: Record<string, XOpatElementItem>, MODULES: Re
             if (!this.canUndo()) return;
 
             for (let historyProvider of this._providers) {
-                if (historyProvider.undo()) return;
+                if (historyProvider.undo()) {
+                    this.raiseEvent('undo');
+                    return;
+                }
             }
 
             const entry = this._buffer[this._buffidx];
@@ -1901,6 +1969,7 @@ export function initXOpat(PLUGINS: Record<string, XOpatElementItem>, MODULES: Re
                 this._lastValidIndex--;
                 if (this._lastValidIndex < 0) this._lastValidIndex = this.BUFFER_LENGTH - 1;
             }
+            this.raiseEvent('undo');
         }
 
         /**
@@ -1910,13 +1979,17 @@ export function initXOpat(PLUGINS: Record<string, XOpatElementItem>, MODULES: Re
             if (!this.canRedo()) return;
 
             for (let historyProvider of this._providers) {
-                if (historyProvider.redo()) return;
+                if (historyProvider.redo()) {
+                    this.raiseEvent('redo');
+                    return;
+                }
             }
 
             this._buffidx = (this._buffidx + 1) % this.BUFFER_LENGTH;
             const entry = this._buffer[this._buffidx];
             if (!entry) return;
             entry.forward();
+            this.raiseEvent('redo');
         }
 
         /**
@@ -2030,14 +2103,17 @@ export function initXOpat(PLUGINS: Record<string, XOpatElementItem>, MODULES: Re
                         case "r":
                         case "R":
                             VIEWER.viewport.setRotation(0);
+                            e.preventDefault();
                             return;
                         case "q":
                         case "Q": // Rotate Left
                             VIEWER.viewport.setRotation(VIEWER.viewport.getRotation() - 90);
+                            e.preventDefault();
                             return;
                         case "e":
                         case "E": // Rotate Right
                             VIEWER.viewport.setRotation(VIEWER.viewport.getRotation() + 90);
+                            e.preventDefault();
                             return;
                         default:
                             return;
@@ -2078,14 +2154,14 @@ export function initXOpat(PLUGINS: Record<string, XOpatElementItem>, MODULES: Re
         }, {
             'next #left-side-buttons-menu-b-share': $.t('tutorials.basic.14')
         }, { 'next #left-side-buttons-menu-b-tutorial': $.t('tutorials.basic.15') }], function () {
-            if (withLayers()) {
-                //prerequisite - pin in default state
-                let pin = $("#shaders-pin");
-                let container = pin.parents().eq(1).children().eq(1);
-                pin.removeClass('pressed');
-                container.removeClass('force-visible');
-            }
-        });
+        if (withLayers()) {
+            //prerequisite - pin in default state
+            let pin = $("#shaders-pin");
+            let container = pin.parents().eq(1).children().eq(1);
+            pin.removeClass('pressed');
+            container.removeClass('force-visible');
+        }
+    });
 }
 
 (window as any).initXOpat = initXOpat;

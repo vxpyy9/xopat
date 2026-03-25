@@ -29,7 +29,7 @@ class Button extends BaseSelectableComponent {
     constructor(options = undefined, ...args) {
         options = super(options, ...args).options;
         this.classMap["base"] = options["base"] || "btn";
-        this.classMap["type"] = options["type"] || "btn-neutral";
+        this.classMap["type"] = options["type"] || "";
         this.classMap["size"] = "";
         this.classMap["outline"] = "";
         this.classMap["orientation"] = "";

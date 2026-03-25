@@ -22,7 +22,6 @@
         "objectGenericFactories.js",
         "objectAdvancedFactories.js",
         "freeFormTool.js",
-        "history.js"
     ],
     "requires": ["fabricjs"],
     // Whether to store presets in the local storage

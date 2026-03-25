@@ -15,6 +15,7 @@ export class MobileBottomBar {
     }
 
     init() {
+        this._breakpoint = APPLICATION_CONTEXT.getOption("maxMobileWidthPx");
         this.context = document.getElementById("bottom-container");
         if (!this.context) {
             console.warn("MobileBottomBar: #bottom-container not found.");
@@ -29,7 +30,7 @@ export class MobileBottomBar {
         this.context.style.height = "auto";
 
         window.addEventListener("app:layout-change", (e) => {
-            this.onLayoutChange?.(e.detail || { width: window.innerWidth });
+            this.onLayoutChange(e.detail || { width: window.innerWidth });
         });
 
         window.addEventListener("pointerdown", this._syncBound, true);
@@ -41,9 +42,7 @@ export class MobileBottomBar {
         }
 
         this.sync();
-        window.dispatchEvent(new CustomEvent("app:layout-change", {
-            detail: { width: window.innerWidth }
-        }));
+        this.onLayoutChange({ width: window.innerWidth });
     }
 
     destroy() {
@@ -174,12 +173,21 @@ export class MobileBottomBar {
     onLayoutChange(details) {
         const width = details?.width ?? window.innerWidth;
         if (!this.context) return;
-        this.context.style.height = width < 600 ? "auto" : "0px";
-        this.context.style.overflow = width < 600 ? "visible" : "hidden";
-        if (width >= 600) {
+
+
+        const isMobile = this._isMobileWidth(width);
+        if (isMobile) {
+            this.context.style.height = "auto";
+            this.context.style.overflow =  "visible" ;
+            this._setToolbarsVisible(this._activePanel === "globalMenu");
+        } else {
+            this.context.style.height = "0px";
+            this.context.style.overflow = "hidden";
             this._closeViewerPicker();
             this._setActivePanel(null);
+            this._setToolbarsVisible(true);
         }
+
         this.sync();
     }
 
@@ -357,6 +365,23 @@ export class MobileBottomBar {
         });
     }
 
+    _isMobileWidth(width = window.innerWidth) {
+        return width < this._breakpoint;
+    }
+
+    _getToolbarsContainer() {
+        return document.getElementById("toolbars-container");
+    }
+
+    _setToolbarsVisible(visible) {
+        const toolbars = this._getToolbarsContainer();
+        if (!toolbars) return;
+
+        toolbars.style.display = visible ? "" : "none";
+        toolbars.style.visibility = visible ? "visible" : "hidden";
+        toolbars.style.pointerEvents = visible ? "auto" : "none";
+    }
+
     _hideViewerMenu(menu) {
         if (!menu) return;
         if (menu.context) {
@@ -374,6 +399,7 @@ export class MobileBottomBar {
     _hideGlobalMenu() {
         const toolbars = document.getElementById("toolbars-container");
         if (toolbars) toolbars.style.display = "none";
+        this._setToolbarsVisible(!this._isMobileWidth());
         if (window.LAYOUT?.isOpened?.()) {
             window.LAYOUT.toggle?.();
         }
@@ -399,10 +425,7 @@ export class MobileBottomBar {
         this._closeViewerPicker();
         this._hideViewerMenus();
 
-        const toolbars = document.getElementById("toolbars-container");
-        if (toolbars) {
-            toolbars.style.display = "";
-        }
+        this._setToolbarsVisible(true);
 
         window.LAYOUT?.closeFullscreen?.();
         window.LAYOUT?.toggle?.();

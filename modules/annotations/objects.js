@@ -84,6 +84,26 @@ OSDAnnotations.AnnotationObjectFactory = class {
     ];
 
     /**
+     * Geometry properties.
+     * Used internally for cloning, when only geometry should be copied.
+     * @type {string[]}
+     */
+    static geometryProps = [
+        'left', 'top', 'originX', 'originY',
+        'angle', 'flipX', 'flipY',
+        'scaleX', 'scaleY',
+        'skewX', 'skewY',
+        'transformMatrix',
+        'width', 'height',
+        'strokeWidth', 'strokeDashArray', 'strokeLineCap',
+        'strokeLineJoin', 'strokeMiterLimit', 'strokeUniform',
+        'radius', 'rx', 'ry',
+        'x1', 'y1', 'x2', 'y2',
+        'points',
+        'path', 'pathOffset'
+    ];
+
+    /**
      * Human-readable annotation title
      * @returns {string}
      */
@@ -307,70 +327,79 @@ OSDAnnotations.AnnotationObjectFactory = class {
         const control = new fabric.Control({
             x: 0.5,
             y: -0.5,
-            offsetX: 25,
-            offsetY: 20,
+            offsetX: 22,
+            offsetY: -16,
             cursorStyle: 'pointer',
-            sizeX: 40,
-            sizeY: 40,
+            sizeX: 34,
+            sizeY: 34,
             touchSizeX: 40,
             touchSizeY: 40,
             enabled: true,
             render: (ctx, left, top, styleOverride, fabricObject) => {
-                const icon = typeof iconRenderer === 'string' ? iconRenderer : iconRenderer(fabricObject);
-                const value = valueRenderer ? (
-                    typeof valueRenderer === 'string' ? valueRenderer : valueRenderer(fabricObject)
-                ) : null;
-                const showValue = value !== null && value !== undefined && value !== '';
+                const rawIcon = typeof iconRenderer === 'string' ? iconRenderer : iconRenderer(fabricObject);
+                const icon = this._resolveControlGlyph(rawIcon);
 
-                const iconSize = 36;
+                const rawValue = valueRenderer
+                    ? (typeof valueRenderer === 'string' ? valueRenderer : valueRenderer(fabricObject))
+                    : null;
+
+                const showValue = rawValue !== null && rawValue !== undefined && rawValue !== '' && Number(rawValue) > 0;
+                const value = showValue ? String(rawValue) : '';
+
+                const iconSize = 18;
                 const padding = 8;
-
-                let totalWidth = iconSize;
                 let textWidth = 0;
 
                 if (showValue) {
-                    ctx.font = `${iconSize * 0.4}px Arial`;
+                    ctx.font = `600 11px Arial`;
                     textWidth = ctx.measureText(value).width;
-                    totalWidth = iconSize + padding + textWidth + padding;
                 }
 
-                const height = iconSize;
-                const radius = height / 2;
+                const bubbleHeight = 24;
+                const bubbleWidth = showValue
+                    ? (iconSize + padding * 2 + 8 + textWidth)
+                    : (iconSize + padding * 2);
 
-                const leftAlignedX = left + (totalWidth / 2) - (iconSize / 2);
+                const radius = bubbleHeight / 2;
 
                 ctx.save();
-                ctx.translate(leftAlignedX, top);
-                ctx.rotate(fabric.util.degreesToRadians(fabricObject.angle));
+                ctx.translate(left, top);
+                ctx.rotate(fabric.util.degreesToRadians(fabricObject.angle || 0));
 
-                const halfWidth = totalWidth / 2;
+                const x = -bubbleWidth / 2;
+                const y = -bubbleHeight / 2;
 
                 ctx.beginPath();
-                ctx.arc(-halfWidth + radius, 0, radius, Math.PI / 2, 3 * Math.PI / 2);
-                ctx.arc(halfWidth - radius, 0, radius, 3 * Math.PI / 2, Math.PI / 2);
+                ctx.moveTo(x + radius, y);
+                ctx.lineTo(x + bubbleWidth - radius, y);
+                ctx.arcTo(x + bubbleWidth, y, x + bubbleWidth, y + radius, radius);
+                ctx.lineTo(x + bubbleWidth, y + bubbleHeight - radius);
+                ctx.arcTo(x + bubbleWidth, y + bubbleHeight, x + bubbleWidth - radius, y + bubbleHeight, radius);
+                ctx.lineTo(x + radius, y + bubbleHeight);
+                ctx.arcTo(x, y + bubbleHeight, x, y + bubbleHeight - radius, radius);
+                ctx.lineTo(x, y + radius);
+                ctx.arcTo(x, y, x + radius, y, radius);
                 ctx.closePath();
 
                 ctx.fillStyle = 'white';
                 ctx.fill();
-
                 ctx.strokeStyle = 'black';
                 ctx.lineWidth = 1;
                 ctx.stroke();
 
-                const iconX = -halfWidth + iconSize / 2;
-                ctx.font = `${iconSize * 0.8}px Font Awesome 5 Free`;
+                const iconCenterX = x + padding + iconSize / 2;
+
+                ctx.font = `900 ${iconSize}px "Font Awesome 5 Free"`;
                 ctx.textAlign = 'center';
                 ctx.textBaseline = 'middle';
                 ctx.fillStyle = 'black';
-                ctx.fillText(icon, iconX, 3);
+                ctx.fillText(icon, iconCenterX, 1);
 
                 if (showValue) {
-                    const textX = iconX + iconSize / 2 + padding + textWidth / 2;
-                    ctx.font = `${iconSize * 0.5}px Segoe UI`;
-                    ctx.textAlign = 'center';
+                    ctx.font = `600 11px Arial`;
+                    ctx.textAlign = 'left';
                     ctx.textBaseline = 'middle';
-                    ctx.fillStyle = 'black';
-                    ctx.fillText(value, textX, 1);
+                    ctx.fillText(value, x + padding + iconSize + 8, 1);
                 }
 
                 ctx.restore();
@@ -396,53 +425,102 @@ OSDAnnotations.AnnotationObjectFactory = class {
                 if (isVisible) visibleBefore++;
             }
 
-            const spacing = 45;
-            const baseOffsetY = 20;
-            const dynamicOffsetY = baseOffsetY + spacing * visibleBefore;
+            const spacing = 30;
+            const baseOffsetY = -16;
+            const dynamicOffsetY = baseOffsetY - spacing * visibleBefore;
 
-            const pt = { x: control.x * dim.x + control.offsetX, y: control.y * dim.y + dynamicOffsetY };
+            const pt = {
+                x: control.x * dim.x + control.offsetX,
+                y: control.y * dim.y + dynamicOffsetY
+            };
             return fabric.util.transformPoint(pt, finalMatrix);
         };
 
         if (onClick) {
             control.mouseUpHandler = function(eventData, transform, x, y) {
+                eventData?.preventDefault?.();
+                eventData?.stopPropagation?.();
+
+                const wrapper = transform?.target?._factory?.()?._context?.fabric;
+                if (wrapper) {
+                    wrapper._controlInteractionActive = false;
+                    wrapper.module.cursor.isDown = false;
+                    wrapper.module.cursor.mouseTime = Infinity;
+                }
+
                 onClick(eventData, transform, x, y);
                 return true;
             };
         }
 
         return control;
+    }
 
+    _resolveControlGlyph(icon) {
+        const map = {
+            'fa-eye': '\uf06e',
+            'fa-eye-slash': '\uf070',
+            'fa-lock': '\uf023',
+            'fa-comments': '\uf086',
+        };
+        return map[icon] || icon || '?';
     }
 
     renderAllControls(ofObject) {
         const controls = {};
 
         controls.private = this.renderIcon(
-            (obj) => obj.private ? 'fa-lock' : 'fa-eye',
+            (obj) => obj.private ? 'fa-eye-slash' : 'fa-eye',
             undefined,
-            undefined,
+            (eventData, transform) => {
+                const target = transform?.target;
+                if (!target) return;
+                const fabric = this._context.fabric;
+                fabric.setAnnotationPrivate(target, !target.private);
+            },
         );
+
         const commentsControl = this.renderIcon(
             'fa-comments',
             (obj) => obj.comments?.filter(c => !c.removed).length ?? 0,
             () => {
-                this._context.raiseEvent('comments-control-clicked')
+                this._context.raiseEvent('comments-control-clicked');
             },
         );
         commentsControl.getVisibility = () => !!this._context.getCommentsEnabled();
         controls.comments = commentsControl;
 
         ofObject.controls = controls;
+        ofObject.hasControls = false;
+        ofObject.hasBorders = false;
+    }
+
+    __cloneValue(value) {
+        if (value === null || value === undefined) return value;
+        if (typeof value !== "object") return value;
+
+        try {
+            if (typeof structuredClone === "function") {
+                return structuredClone(value);
+            }
+        } catch (e) {
+            // fallback below
+        }
+
+        try {
+            return JSON.parse(JSON.stringify(value));
+        } catch (e) {
+            return value;
+        }
     }
 
     __copyProps(ofObject, toObject, defaultProps, additionalProps) {
         for (let prop of defaultProps) {
-            toObject[prop] = ofObject[prop];
+            toObject[prop] = this.__cloneValue(ofObject[prop]);
         }
         if (additionalProps?.length > 0) {
             for (let prop of additionalProps) {
-                toObject[prop] = ofObject[prop];
+                toObject[prop] = this.__cloneValue(ofObject[prop]);
             }
         }
         this.__copyInnerProps(ofObject, toObject);
@@ -450,14 +528,13 @@ OSDAnnotations.AnnotationObjectFactory = class {
 
     __copyInnerProps(ofObject, toObject) {
         for (let prop of this.exports()) {
-            toObject[prop] = ofObject[prop];
+            toObject[prop] = this.__cloneValue(ofObject[prop]);
         }
         for (let prop of this.exportsGeometry()) {
-            toObject[prop] = ofObject[prop];
+            toObject[prop] = this.__cloneValue(ofObject[prop]);
         }
         toObject.type = ofObject.type; //always
     }
-
 
     /**
      * Create an object at given point with a given strategy
@@ -573,6 +650,7 @@ OSDAnnotations.AnnotationObjectFactory = class {
      * Update the object coordinates by finishing edit() call (this is guaranteed to happen at least once before)
      * @param {fabric.Object} theObject recalculate the object that has been modified
      * @param {boolean} [ignoreReplace=false] skip the fabric.replaceAnnotation call
+     * @return {fabric.Object} modified or original object
      */
     recalculate(theObject, ignoreReplace=false) {
     }
@@ -648,52 +726,93 @@ OSDAnnotations.AnnotationObjectFactory = class {
         // }
     }
 
-    /**
-     * Creates a deep clone of a Fabric.js object
-     * @param {fabric.Object} theObject the Fabric.js object to clone
-     * @param {string[]} customProps an array of custom properties to include in the clone
-     * @returns {Promise<fabric.Object>} a promise that resolves with the cloned object
-     */
-    cloneFabricObject(theObject, customProps = []) {
-        return new Promise((resolve, reject) => {
-            theObject.clone(cloned => {
-                resolve(cloned);
-            }, customProps, error => {
-                reject(error || new Error("Failed to clone Fabric object"));
-            });
+    _copyVal(val) {
+        if (Array.isArray(val)) {
+            return val.map(item => this._copyVal(item));
+        }
+        if (val && typeof val === 'object') {
+            const copy = {};
+            for (const key in val) {
+                if (val.hasOwnProperty(key)) copy[key] = this._copyVal(val[key]);
+            }
+            return copy;
+        }
+        return val;
+    }
+
+    _cloneFabricObject(theObject, customProps = []) {
+        const toCopy = [...this.constructor.geometryProps, ...customProps];
+
+        let cloned;
+        try {
+            cloned = new theObject.constructor();
+        } catch (e) {
+            cloned = new fabric.Object();
+        }
+
+        const props = {};
+        toCopy.forEach(p => {
+          if (theObject[p] !== undefined) props[p] = this._copyVal(theObject[p]);
         });
+
+        cloned.set(props);
+
+        if (theObject.path && !cloned.path) cloned.path = this._copyVal(theObject.path);
+        if (theObject.points && !cloned.points) cloned.points = this._copyVal(theObject.points);
+
+        cloned.setCoords();
+        return cloned;
     }
 
     /**
-     * Called when object is selected
-     * @param {fabric.Object} theObject selected fabricjs object
-     * @returns fabricjs object that will be used for highlighting
+     * Create highlight object for the given object
+     * @param {fabric.Object} theObject object to highlight
+     * @return {fabric.Object|null} highlight object or null on error
      */
-    async selected(theObject) {
+    createHighlight(theObject) {
         try {
-            const clonedObj = await this.cloneFabricObject(theObject);
+            const clonedObj = this._cloneFabricObject(theObject, [
+                "originalStrokeWidth",
+                "cornerColor",
+                "borderColor",
+                //"factoryID"
+            ]);
 
-            let newStroke = theObject.strokeWidth * 7;
-            let newStrokeDashArray = [newStroke * 4, newStroke * 2];
+            let newStroke = theObject.strokeWidth * 5;
+            let newStrokeDashArray = [newStroke * 3, newStroke * 2];
+
+            const center = theObject.getCenterPoint();
 
             clonedObj.set({
                 fill: '',
-                stroke: theObject.cornerColor,
+                // border color === control UI color, stroke == class
+                stroke: theObject.borderColor,
                 strokeWidth: newStroke,
-                originalStrokeWidth: theObject.originalStrokeWidth,
                 strokeDashArray: newStrokeDashArray,
                 strokeLineCap: 'round',
-                strokeUniform: true,
-                left: clonedObj.left + clonedObj.width / 2,
-                top: clonedObj.top + clonedObj.height / 2,
+                strokeUniform: !!theObject.strokeUniform,
+
                 originX: 'center',
                 originY: 'center',
+                left: center.x,
+                top: center.y,
+
+                angle: theObject.angle || 0,
+                scaleX: theObject.scaleX ?? 1,
+                scaleY: theObject.scaleY ?? 1,
+                flipX: !!theObject.flipX,
+                flipY: !!theObject.flipY,
+
                 selectable: false,
+                evented: false,
                 opacity: 1,
                 hasControls: false,
                 hasBorders: false,
-                isHighlight: true
+                isHighlight: true,
+                excludeFromExport: true,
+                objectCaching: false
             });
+            clonedObj.setCoords();
             delete clonedObj.type;
 
             return clonedObj;
@@ -701,6 +820,13 @@ OSDAnnotations.AnnotationObjectFactory = class {
             console.error("Error in selected function:", error);
             return null;
         }
+    }
+
+    /**
+     * Called when object is selected
+     * @param {fabric.Object} theObject selected fabricjs object
+     */
+    selected(theObject) {
     }
 
     /**
@@ -766,6 +892,15 @@ OSDAnnotations.AnnotationObjectFactory = class {
         ofObject.set({
             stroke: 'rgba(251, 184, 2, 0.75)',
         });
+    }
+
+
+    /**
+     * Resolve annotation text from preset metadata (category) and render it on the object.
+     * Intended for text-based objects.
+     * @param {*} ofObject
+     */
+    renderPresetText(ofObject) {
     }
 
     /**
@@ -848,12 +983,26 @@ OSDAnnotations.PolygonUtilities = {
 
     },
 
-    simplify: function (points, imagePixelOnScreen, highestQuality = true) {
-        // both algorithms combined for performance, simplifies the object based on zoom level
+    simplify: function (points, highestQuality = true) {
         if (points.length <= 2) return points;
 
-        let tolerance = 15 / imagePixelOnScreen;
-        points = highestQuality ? points : this._simplifyRadialDist(points, Math.pow(tolerance, 2));
+        // desired visual tolerance in screen pixels
+        const desiredScreenTol = 15;
+        let pxSize = VIEWER.scalebar.imagePixelSizeOnScreen() || 1;
+
+        // convert to image coords
+        let tolerance = desiredScreenTol / pxSize;
+
+        // CLAMP to keep polygons sane at huge zooms
+        const MIN_TOL = 1.5;   // at least ~1–2 image pixels
+        const MAX_TOL = 100;   // avoid over-simplifying at tiny zoom
+        if (!isFinite(tolerance)) tolerance = MIN_TOL;
+        tolerance = Math.max(MIN_TOL, Math.min(MAX_TOL, tolerance));
+
+        points = highestQuality
+            ? points
+            : this._simplifyRadialDist(points, tolerance * tolerance);
+
         return this._simplifyDouglasPeucker(points, tolerance);
     },
 

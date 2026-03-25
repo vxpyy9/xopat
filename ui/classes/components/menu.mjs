@@ -37,7 +37,16 @@ class Menu extends BaseComponent {
         this._orientation = "TOP";
         this._design = "TITLEICON";
 
-        this.header = new ui.Join({ id: this.id + "-header", style: ui.Join.STYLE.HORIZONTAL });
+        this._namespacedTabs = options?.namespacedTabs === true || Array.isArray(options?.namespaces);
+        this.defaultNamespace = options?.defaultNamespace || Menu.NAMESPACE.SYSTEM;
+        this.namespaceDefinitions = {};
+        this.namespaceOrder = [];
+
+        for (const namespace of (Array.isArray(options?.namespaces) && options.namespaces.length ? options.namespaces : Menu.DEFAULT_NAMESPACES)) {
+            this.registerNamespace(namespace);
+        }
+
+        this.header = new ui.Join({ id: this.id + "-header", style: ui.Join.STYLE.HORIZONTAL});
         this.body = new ui.Div({ id: this.id + "-body", extraClasses: {height: "h-full", width: "w-full"} });
 
         for (let i of this._children) {
@@ -75,6 +84,102 @@ class Menu extends BaseComponent {
         return this.tabs[id];
     }
 
+    usesNamespacedTabs() {
+        return this._namespacedTabs;
+    }
+
+    registerNamespace(namespace) {
+        const normalized = this._normalizeNamespaceDefinition(namespace);
+        const existing = this.namespaceDefinitions[normalized.id] || {};
+
+        this.namespaceDefinitions[normalized.id] = {
+            ...existing,
+            ...normalized,
+            order: normalized.order ?? existing.order ?? ((this.namespaceOrder.length + 1) * 10),
+        };
+
+        if (!this.namespaceOrder.includes(normalized.id)) {
+            this.namespaceOrder.push(normalized.id);
+        }
+
+        this.namespaceOrder.sort((left, right) => {
+            const leftOrder = this.namespaceDefinitions[left]?.order ?? 0;
+            const rightOrder = this.namespaceDefinitions[right]?.order ?? 0;
+            if (leftOrder === rightOrder) {
+                return left.localeCompare(right);
+            }
+            return leftOrder - rightOrder;
+        });
+
+        return this.namespaceDefinitions[normalized.id];
+    }
+
+    getNamespaceDefinition(namespace) {
+        const namespaceId = this._normalizeNamespaceId(namespace);
+        return this.namespaceDefinitions[namespaceId];
+    }
+
+    getNamespaceOrder() {
+        return [...this.namespaceOrder];
+    }
+
+    getTabsByNamespace(namespace) {
+        const namespaceId = this._normalizeNamespaceId(namespace);
+        return Object.values(this.tabs).filter(tab => tab?.namespace === namespaceId);
+    }
+
+    getNamespacesWithTabs() {
+        return this.getNamespaceOrder()
+            .map(namespaceId => ({
+                ...(this.getNamespaceDefinition(namespaceId) || { id: namespaceId, title: this._namespaceTitle(namespaceId) }),
+                tabs: this.getTabsByNamespace(namespaceId),
+            }))
+            .filter(namespace => namespace.tabs.length > 0);
+    }
+
+    _normalizeNamespaceId(namespace) {
+        if (namespace && typeof namespace === "object") {
+            namespace = namespace.id;
+        }
+
+        return `${namespace || this.defaultNamespace || Menu.NAMESPACE.SYSTEM}`;
+    }
+
+    _namespaceTitle(namespaceId) {
+        return `${namespaceId}`
+            .split(/[._-]/g)
+            .filter(Boolean)
+            .map(part => part.charAt(0).toUpperCase() + part.slice(1))
+            .join(" ");
+    }
+
+    _normalizeNamespaceDefinition(namespace) {
+        const id = this._normalizeNamespaceId(namespace);
+        if (typeof namespace === "string" || namespace == null) {
+            return { id, title: this._namespaceTitle(id) };
+        }
+
+        return {
+            ...namespace,
+            id,
+            title: namespace.title || namespace.label || this._namespaceTitle(id),
+        };
+    }
+
+    _applyNamespaceToTab(tab, item) {
+        if (!tab) return tab;
+
+        const shouldNamespace = this._namespacedTabs || item?.namespace;
+        const namespaceId = this._normalizeNamespaceId(item?.namespace);
+
+        if (shouldNamespace) {
+            this.registerNamespace(item?.namespace || namespaceId);
+        }
+
+        tab.namespace = namespaceId;
+        return tab;
+    }
+
     /**
      *
      * @param {*} id id of the item we want to delete
@@ -83,6 +188,7 @@ class Menu extends BaseComponent {
         if (!(id in this.tabs)) { throw new Error("Tab with id " + id + " does not exist"); }
         this.tabs[id].removeTab();
         delete this.tabs[id];
+        return this;
     }
 
     /**
@@ -110,6 +216,7 @@ class Menu extends BaseComponent {
         item.onClick = item.onClick || (() => {});
         let tab = new Dropdown(item);
 
+        this._applyNamespaceToTab(tab, item);
         this.tabs[id] = tab;
 
         tab.headerButton.setClass("join", "join-item");
@@ -148,6 +255,7 @@ class Menu extends BaseComponent {
             throw new Error("Item for menu needs every property set.");
         }
         let tab = item.class ? new item.class(item, this) : new MenuTab(item, this);
+        this._applyNamespaceToTab(tab, item);
 
         const prevTab = this.tabs[item.id];
         if (prevTab) {
@@ -343,6 +451,16 @@ window["workspaceItem"].deleteTab("s3");
 
     }
 }
+
+Menu.NAMESPACE = {
+    SYSTEM: "system",
+    PLUGINS: "plugins",
+};
+
+Menu.DEFAULT_NAMESPACES = [
+    { id: Menu.NAMESPACE.SYSTEM, title: "System", order: 10 },
+    { id: Menu.NAMESPACE.PLUGINS, title: "Plugins", order: 20 },
+];
 
 Menu.ORIENTATION = {
     TOP: function () {
