@@ -366,7 +366,7 @@ title="${customMode.getDescription()}: ${factory.title()}">
 ${modeOptions.join("")}</div>`, 'draw');
 
 		USER_INTERFACE.AdvancedMenu.setMenu(this.id, "annotations-shared", "Export/Import",
-			`<h3 class="f2-light">Annotations <span class="text-small" id="gui-annotations-io-tissue-name">for slide ${this.activeTissue}</span></h3><br>
+			`<h3 class="f2-light">Annotations <span class="text-small" id="gui-annotations-io-tissue-name">for slide ${this._escapeHtml(this.activeTissue)}</span></h3><br>
 <span class="text-small">Annotations can be uploaded to a server, or downloaded using local files. For files, a desired format can be imported or exported.</span>
 <div id="annotations-shared-head"></div><div id="available-annotations"></div>
 <br>
@@ -427,7 +427,7 @@ ${UIComponents.Elements.select({
 		const convertor = OSDAnnotations.Convertor.get(format);
 		document.getElementById('downloadAnnotation').style.visibility = convertor.exportsObjects ? 'visible' : 'hidden';
 		document.getElementById('downloadPreset').style.visibility = convertor.exportsPresets ? 'visible' : 'hidden';
-		document.getElementById('importAnnotation').innerHTML = `Import file: format '${format}'`;
+		document.getElementById('importAnnotation').textContent = `Import file: format '${format}'`;
 		this.exportOptions.format = format;
 		this.setLocalOption('defaultIOFormat', format);
 		$("#annotation-convertor-options").html(
