@@ -23,66 +23,12 @@ export const handlerMethods = {
         VIEWER.addHandler('background-image-swap', () => this.setupActiveTissue());
         VIEWER_MANAGER.broadcastHandler('warn-user', (e) => this._errorHandlers[e.code]?.apply(this, [e]));
 
-        const modeChangeHandler = (e) => {
-            const mode = e.mode;
-            const modes = this.context.Modes;
-            const modeId = mode.getId();
-
-            if (this._htmlWrap && this._modeOptionsPanel) {
-                const rawHtml = (this.context.mode.customHtml && this.context.mode.customHtml()) || '';
-                const hasHtml = !!rawHtml && rawHtml.trim().length > 0;
-
-                if (hasHtml) {
-                    this._htmlWrap.setHtml(rawHtml);
-                    this._modeOptionsPanel.setEnabled(true);
-                    if (!this._forceCloseModeOptions && !this._modeOptionsPanel.isOpen()) {
-                        this._modeOptionsPanel.open();
-                    }
-                } else {
-                    this._htmlWrap.setHtml('');
-                    this._modeOptionsPanel.close();
-                    this._modeOptionsPanel.setEnabled(false);
-                    this._forceCloseModeOptions = true;
-                }
-            }
-
-            if (modeId === modes.AUTO.getId()) {
-                this._gModes.setSelected(modes.AUTO.getId(), false);
-            } else if (
-                modeId === modes.MAGIC_WAND.getId() ||
-                modeId === modes.FREE_FORM_TOOL_CORRECT.getId() ||
-                modeId === modes.VIEWPORT_SEGMENTATION.getId()
-            ) {
-                this._gModes.setSelected('cg-auto', false);
-                this._autoChoice.setSelected(modeId, false, false);
-            } else if (
-                modeId === modes.FREE_FORM_TOOL_ADD.getId() ||
-                modeId === modes.FREE_FORM_TOOL_REMOVE.getId()
-            ) {
-                this._gModes.setSelected('g-brush', false);
-                this._gBrush.setSelected(modeId, false);
-            } else if (modeId === modes.CUSTOM.getId()) {
-                const pl = this.context.presets.left;
-                if (pl && pl.objectFactory && pl.objectFactory.factoryID) {
-                    this._gModes.setSelected('cg-shapes', false);
-                    this._shapeChoice.setSelected(pl.objectFactory.factoryID, false, false);
-                }
-            } else {
-                this._gModes.setSelected(`${modeId}`, false);
-            }
-
-            USER_INTERFACE.Status.show(mode.getDescription());
-        };
-
-        this.context.addHandler('mode-changed', modeChangeHandler);
         this.context.addHandler('import', () => {
             this._refreshAllPresetLists?.();
             this._refreshAllAuthorLists?.();
             this._refreshAllBoardPanels?.();
         });
         this.context.addHandler('enabled', this.annotationsEnabledHandler.bind(this));
-        this.annotationsEnabledEditModeHandler = this.annotationsEnabledEditModeHandler.bind(this);
-        this.context.addHandler('enabled-edit-mode', this.annotationsEnabledEditModeHandler);
         this.context.addHandler('preset-select', () => this._refreshAllPresetLists?.());
 
         this.context.addHandler('preset-create', () => {
@@ -147,15 +93,6 @@ export const handlerMethods = {
         const toolBar = document.getElementById('annotations-tool-bar');
         const enabled = !this.context.disabledInteraction;
         if (toolBar) toolBar.classList.toggle('disabled', !enabled);
-    },
-
-    annotationsEnabledEditModeHandler(e) {
-        // todo disable whole toolbar activity, visibility and outline slider to not to allow change these while edit is going on.
-        if (e.isEditEnabled) {
-            // turn off
-        } else {
-            // turn on
-        }
     },
 
     freeFormToolControls() {

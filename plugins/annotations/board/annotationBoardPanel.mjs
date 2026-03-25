@@ -488,8 +488,17 @@ export class AnnotationBoardPanel {
             const editBtn = document.createElement('button');
             editBtn.className = 'btn btn-ghost btn-xs btn-square';
             editBtn.appendChild(faIcon('edit'));
+            editBtn.dataset.role = 'annotation-edit';
             editBtn.onclick = (e) => {
                 e.stopPropagation();
+
+                if (this.context.isEditSelectionModeActive?.() &&
+                    (this.fabric.isEditingObject?.(object) || this.fabric.isOngoingEditOf?.(object))) {
+                    this.plugin.switchModeActive?.(this.context.Modes.AUTO.getId());
+                    this.context.setMode(this.context.Modes.AUTO);
+                    return;
+                }
+
                 this._boardItemEdit(editBtn, this._getFocusBBox(object, factory), object);
             };
             actions.appendChild(editBtn);
@@ -570,27 +579,17 @@ export class AnnotationBoardPanel {
     }
 
     _boardItemEdit(self, focusBBox, object) {
-        let cancelled = false;
-        try {
-            this.context.raiseEvent('annotation-before-edit', {
-                object,
-                isCancelled: () => cancelled,
-                setCancelled: (value) => { cancelled = value; }
-            });
-        } catch {}
-        if (cancelled || !object) return;
+        if (!object) return;
 
         if (this._editSelection) this._boardItemSave(true);
 
         const factory = this.context.getAnnotationObjectFactory(object.factoryID);
         if (!factory?.isEditable?.()) return;
 
+        this.plugin.switchModeActive?.(this.context._ensureEditSelectionMode().getId());
+        if (!this.context.startEditModeForObject(object, this.viewer)) return;
+
         this._disableForEdit();
-        this.fabric.beginBoardEdit?.(object);
-        this.fabric.selectAnnotation(object, true, true);
-        this.fabric.removeHighlight?.();
-        object.set?.({ hoverCursor: 'move' });
-        factory.edit?.(object);
 
         const row = self.closest('[data-type="annotation"]');
         const input = row?.querySelector('input[name="category"]');
@@ -600,8 +599,8 @@ export class AnnotationBoardPanel {
             input.focus();
             input.select();
             input.addEventListener('keydown', this._editKeyHandler = (e) => {
-                if (e.key === 'Enter') this._boardItemSave();
-                if (e.key === 'Escape') this._boardItemSave(true);
+                if (e.key === 'Enter') this._boardItemSave(false);
+                if (e.key === 'Escape') this.context.setMode(this.context.Modes.AUTO);
             });
         }
 
@@ -609,7 +608,6 @@ export class AnnotationBoardPanel {
         self.textContent = 'save';
         self.style.color = '#d32f2f';
         this._editSelection = { self, target: object, incrementId: object.incrementId, input };
-        this.fabric.raiseEvent('annotation-edit', { object });
     }
 
     _boardItemSave(cancelOnly = false) {
@@ -628,12 +626,6 @@ export class AnnotationBoardPanel {
                 }
                 if (this._editKeyHandler) input.removeEventListener('keydown', this._editKeyHandler);
             }
-
-            if (obj) {
-                obj.set?.({ hoverCursor: 'default' });
-                const factory = this.context.getAnnotationObjectFactory(obj.factoryID);
-                factory?.recalculate?.(obj);
-            }
         } catch (error) {
             console.warn(error);
         }
@@ -644,26 +636,20 @@ export class AnnotationBoardPanel {
             self.style.color = '';
         }
 
-        this.fabric.endBoardEdit?.();
+        this.fabric.endSelectionEdit?.(cancelOnly);
         this._editSelection = undefined;
         this._enableAfterEdit();
         this.requestRender(true);
     }
 
     _enableAfterEdit() {
-        this.context.setMouseOSDInteractive?.(true);
-        this.context.enableInteraction?.(true);
         this._setSortableEnabled(true);
         this._updateDeleteSelectionHeaderButton(false);
-        this.context.raiseEvent('enabled-edit-mode', { isEditEnabled: false });
     }
 
     _disableForEdit() {
-        this.context.setMouseOSDInteractive?.(false);
-        this.context.enableInteraction?.(false);
         this._setSortableEnabled(false);
         this._updateDeleteSelectionHeaderButton(true);
-        this.context.raiseEvent('enabled-edit-mode', { isEditEnabled: true });
     }
 
     _setSortableEnabled(enabled) {
@@ -1000,7 +986,7 @@ export class AnnotationBoardPanel {
         };
 
         const handler = (e) => {
-            if (this._editSelection) return;
+            if (this._editSelection || this.fabric.isEditing?.() || this.fabric.isOngoingEdit?.()) return;
 
             const target = e.target;
             const item = target?.closest?.('[data-type="annotation"],[data-type="layer"]');

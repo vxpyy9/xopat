@@ -55,6 +55,7 @@ class AnnotationsGUI extends XOpatPlugin {
         this.context.setCustomModeUsed('MAGIC_WAND', OSDAnnotations.MagicWand);
         this.context.setCustomModeUsed('FREE_FORM_TOOL_CORRECT', OSDAnnotations.StateCorrectionTool);
         this.context.setCustomModeUsed('VIEWPORT_SEGMENTATION', OSDAnnotations.ViewportSegmentation);
+        this.context.setCustomModeUsed('EDIT_SELECTION', OSDAnnotations.StateEditSelection);
 
         this._commentsEnabled = this.getOption('commentsEnabled', this.getStaticMeta('commentsEnabled', true));
         this.context.commentsEnabled = this._commentsEnabled;

@@ -1,8 +1,5 @@
 export const navigationMethods = {
     switchModeActive(id, factory = undefined, isLeftClick) {
-        const activeFabric = this.context.getFabric(VIEWER?.uniqueId);
-        if (activeFabric?.isOngoingEdit?.()) return;
-
         const currentId = this.context.mode.getId();
         if (currentId === id) {
             if (id === 'custom') {

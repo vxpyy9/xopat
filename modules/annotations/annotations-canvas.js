@@ -168,7 +168,7 @@ OSDAnnotations.FabricWrapper = class extends XOpatViewerSingleton {
      * @return Promise((string|object)) serialized data or object of serialized annotations and presets (if applicable)
      */
     async export(options={}, withAnnotations=true, withPresets=true) {
-        this.requestBoardSave();
+        this.requestEndSelectionEdit();
 
         options = $.extend(true, {}, this.module.getExportOptions(), options);
         //prevent immediate serialization as we feed it to a merge immediately, -> we don't reuse exportPartial(..)
@@ -379,7 +379,7 @@ OSDAnnotations.FabricWrapper = class extends XOpatViewerSingleton {
             this._cachedTargetCanvasSelection = this.getSelectedAnnotations();
             this.clearAnnotationSelection(true);
             this.removeHighlight();
-            this.requestBoardSave();
+            this.requestEndSelectionEdit();
         }
 
         for (let i = 0; i < objects.length; i++) {
@@ -799,14 +799,14 @@ OSDAnnotations.FabricWrapper = class extends XOpatViewerSingleton {
         return true;
     }
 
-    isOngoingEditOf(ofObject) {
+    isEditingObject(ofObject) {
         return !!(
             this._boardEditSelection &&
             this._boardEditSelection.incrementId === ofObject?.incrementId
         );
     }
 
-    isOngoingEdit() {
+    isEditing() {
         return !!(
             this._boardEditSelection &&
             this._boardEditSelection.incrementId !== undefined &&
@@ -814,21 +814,136 @@ OSDAnnotations.FabricWrapper = class extends XOpatViewerSingleton {
         );
     }
 
-    beginBoardEdit(object) {
-        if (!object) return;
-        this._boardEditSelection = {
-            incrementId: object.incrementId,
-            internalID: object.internalID
-        };
+    getEditedObject() {
+        if (!this._boardEditSelection) return undefined;
+
+        const { incrementId, internalID } = this._boardEditSelection;
+        let object = incrementId !== undefined && incrementId !== null
+            ? this.findObjectOnCanvasByIncrementId(incrementId)
+            : undefined;
+
+        if (object && internalID !== undefined && internalID !== null && object.internalID !== internalID) {
+            object = undefined;
+        }
+
+        if (!object && internalID !== undefined && internalID !== null) {
+            object = this.canvas.getObjects().find(item => item?.internalID === internalID);
+        }
+
+        if (!object) {
+            this._boardEditSelection = undefined;
+            return undefined;
+        }
+
+        return object;
     }
 
-    endBoardEdit() {
+    beginSelectionEdit(object) {
+        if (!object) return false;
+
+        const factory = this.module.getAnnotationObjectFactory(object.factoryID);
+        if (!factory?.isEditable?.()) return false;
+
+        if (this._selectionEditTransition) {
+            return this.isEditingObject?.(object) || this.isOngoingEditOf?.(object) || false;
+        }
+
+        this._selectionEditTransition = true;
+        try {
+            const current =
+                this.getEditedObject?.() ||
+                this.getOngoingEditObject?.();
+
+            if (current?.incrementId === object.incrementId) {
+                return true;
+            }
+
+            if (current) {
+                // switching edit target is a cancel of the previous edit, not a save
+                this.endSelectionEdit(true);
+            }
+
+            this._boardEditSelection = {
+                incrementId: object.incrementId,
+                internalID: object.internalID
+            };
+
+            this.module.setMouseOSDInteractive?.(false);
+
+            this.module._runWithoutEditSelectionSync?.(() => {
+                if (!this.isAnnotationSelected?.(object)) {
+                    this.selectAnnotation?.(object, true, true);
+                }
+            });
+
+            this.removeHighlight?.();
+            object.set?.({ hoverCursor: 'move' });
+
+            factory.edit?.(object);
+
+            const payload = { object, viewer: this.viewer };
+            this.raiseEvent('annotation-edit', payload);
+            this.module.raiseEvent('annotation-edit', payload);
+            return true;
+        } finally {
+            this._selectionEditTransition = false;
+        }
+    }
+
+    endSelectionEdit(cancelOnly = false) {
+        const object =
+            this.getEditedObject?.() ||
+            this.getOngoingEditObject?.();
+
+        if (!object) {
+            this._boardEditSelection = undefined;
+            this.module.setMouseOSDInteractive(true);
+            return false;
+        }
+
+        try {
+            object.set?.({ hoverCursor: 'default' });
+
+            if (!cancelOnly) {
+                const factory = this.module.getAnnotationObjectFactory(object.factoryID);
+                factory?.recalculate?.(object);
+            }
+        } catch (error) {
+            console.warn(error);
+        }
+
         this._boardEditSelection = undefined;
+        this.module.setMouseOSDInteractive(true);
+
+        const payload = {
+            object,
+            viewer: this.viewer,
+            cancelOnly: !!cancelOnly
+        };
+        this.raiseEvent('annotation-edit-end', payload);
+        this.module.raiseEvent('annotation-edit-end', payload);
+        return true;
     }
 
-    requestBoardSave() {
-        this.raiseEvent('annotation-board-save-request', { viewer: this.viewer });
-        this.module.raiseEvent('annotation-board-save-request', { viewer: this.viewer });
+    requestEndSelectionEdit(cancelOnly = false) {
+        const payload = {
+            viewer: this.viewer,
+            cancelOnly: !!cancelOnly
+        };
+        this.module.raiseEvent('annotation-board-save-request', payload);
+    }
+
+// backward-compatible aliases
+    isOngoingEditOf(ofObject) {
+        return this.isEditingObject(ofObject);
+    }
+
+    isOngoingEdit() {
+        return this.isEditing();
+    }
+
+    getOngoingEditObject() {
+        return this.getEditedObject();
     }
 
     getFocusBBox(of, factory = undefined) {
@@ -991,7 +1106,7 @@ OSDAnnotations.FabricWrapper = class extends XOpatViewerSingleton {
                 this.deselectLayer(layer, true);
             }
             if (affectedObjects.some(obj => this.isOngoingEditOf?.(obj))) {
-                this.requestBoardSave();
+                this.requestEndSelectionEdit();
             }
         }
 
@@ -1603,9 +1718,10 @@ OSDAnnotations.FabricWrapper = class extends XOpatViewerSingleton {
         if (sel.length === 0 && desel.length === 0) return;
 
         this.raiseEvent('annotation-selection-changed', {
-          selected: sel,
-          deselected: desel,
-          fromCanvas
+            viewer: this.viewer,
+            selected: sel,
+            deselected: desel,
+            fromCanvas
         });
     }
 

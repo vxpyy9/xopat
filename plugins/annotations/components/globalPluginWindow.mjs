@@ -31,10 +31,14 @@ export const globalPluginWindowMethods = {
 
         this.context.addHandler('annotation-board-save-request', (e) => {
             const viewerId = e?.viewer ? this._resolveViewerId(e.viewer) : undefined;
+            const cancelOnly = !!e?.cancelOnly;
+
             if (viewerId) {
-                this._getViewerUI(viewerId)?.boardPanel?.commitEdit();
+                this._getViewerUI(viewerId)?.boardPanel?.commitEdit(cancelOnly);
             } else {
-                VIEWER_MANAGER.viewers.forEach((viewer) => this._getViewerUI(viewer.uniqueId)?.boardPanel?.commitEdit());
+                VIEWER_MANAGER.viewers.forEach((viewer) => {
+                    this._getViewerUI(viewer.uniqueId)?.boardPanel?.commitEdit(cancelOnly);
+                });
             }
         });
 
@@ -85,12 +89,6 @@ export const globalPluginWindowMethods = {
                     icon: 'fa-rotate-right',
                     label: this.t('annotations.toolbar.redo'),
                     onClick: () => this.context.redo()
-                }),
-                new ui.ToolbarItem({
-                    id: 'toolbar-history-board',
-                    icon: 'fa-list',
-                    label: this.t('annotations.toolbar.history'),
-                    onClick: () => this.switchMenuList('annot')
                 }),
                 new ui.ToolbarItem({
                     id: 'toolbar-history-metrics',
@@ -155,27 +153,41 @@ export const globalPluginWindowMethods = {
             ).attachTo(gModes);
 
             this._autoChoice = new ui.ToolbarChoiceGroup({
-                    itemID: 'cg-auto',
-                    defaultSelected: modes.MAGIC_WAND.getId(),
-                    onChange: (id) => {
-                        this.switchModeActive(id);
+                itemID: 'cg-auto',
+                defaultSelected: modes.MAGIC_WAND.getId(),
+                onChange: (id) => {
+                    this.switchModeActive(id);
+                }
+            },
+            new ui.ToolbarItem({
+                itemID: modes.MAGIC_WAND.getId(),
+                icon: modes.MAGIC_WAND.getIcon(),
+                label: modes.MAGIC_WAND.getDescription()
+            }),
+            new ui.ToolbarItem({
+                itemID: modes.FREE_FORM_TOOL_CORRECT.getId(),
+                icon: modes.FREE_FORM_TOOL_CORRECT.getIcon(),
+                label: modes.FREE_FORM_TOOL_CORRECT.getDescription()
+            }),
+            new ui.ToolbarItem({
+                itemID: modes.VIEWPORT_SEGMENTATION.getId(),
+                icon: modes.VIEWPORT_SEGMENTATION.getIcon(),
+                label: modes.VIEWPORT_SEGMENTATION.getDescription()
+            })).attachTo(gModes);
+
+            new ui.ToolbarItem({
+                itemID: modes.EDIT_SELECTION.getId(),
+                icon: modes.EDIT_SELECTION.getIcon(),
+                label: modes.EDIT_SELECTION.getDescription(),
+                onClick: () => {
+                    if (this.context.mode === modes.EDIT_SELECTION) {
+                        this.switchModeActive(modes.AUTO.getId());
+                        return;
                     }
-                },
-                new ui.ToolbarItem({
-                    itemID: modes.MAGIC_WAND.getId(),
-                    icon: modes.MAGIC_WAND.getIcon(),
-                    label: modes.MAGIC_WAND.getDescription()
-                }),
-                new ui.ToolbarItem({
-                    itemID: modes.FREE_FORM_TOOL_CORRECT.getId(),
-                    icon: modes.FREE_FORM_TOOL_CORRECT.getIcon(),
-                    label: modes.FREE_FORM_TOOL_CORRECT.getDescription()
-                }),
-                new ui.ToolbarItem({
-                    itemID: modes.VIEWPORT_SEGMENTATION.getId(),
-                    icon: modes.VIEWPORT_SEGMENTATION.getIcon(),
-                    label: modes.VIEWPORT_SEGMENTATION.getDescription()
-                })).attachTo(gModes);
+                    this.switchModeActive(modes.EDIT_SELECTION.getId());
+                }
+            }).attachTo(gModes);
+
             this._gModes = gModes;
 
             this._htmlWrap = new UI.RawHtml({
@@ -198,11 +210,65 @@ export const globalPluginWindowMethods = {
                 [gHistory, new UI.ToolbarSeparator(), gModes, new UI.ToolbarSeparator(), this._modeOptionsPanel],
                 'draw'
             );
+
+            const modeChangeHandler = (e) => {
+                const mode = e.mode;
+                const modes = this.context.Modes;
+                const modeId = mode.getId();
+
+                if (this._htmlWrap && this._modeOptionsPanel) {
+                    const rawHtml = (this.context.mode.customHtml && this.context.mode.customHtml()) || '';
+                    const hasHtml = !!rawHtml && rawHtml.trim().length > 0;
+
+                    if (hasHtml) {
+                        this._htmlWrap.setHtml(rawHtml);
+                        this._modeOptionsPanel.setEnabled(true);
+                        if (!this._forceCloseModeOptions && !this._modeOptionsPanel.isOpen()) {
+                            this._modeOptionsPanel.open();
+                        }
+                    } else {
+                        this._htmlWrap.setHtml('');
+                        this._modeOptionsPanel.close();
+                        this._modeOptionsPanel.setEnabled(false);
+                        this._forceCloseModeOptions = true;
+                    }
+                }
+
+                if (modeId === modes.AUTO.getId()) {
+                    this._gModes.setSelected(modes.AUTO.getId(), false);
+                } else if (
+                    modeId === modes.MAGIC_WAND.getId() ||
+                    modeId === modes.FREE_FORM_TOOL_CORRECT.getId() ||
+                    modeId === modes.VIEWPORT_SEGMENTATION.getId()
+                ) {
+                    this._gModes.setSelected('cg-auto', false);
+                    this._autoChoice.setSelected(modeId, false, false);
+                } else if (
+                    modeId === modes.FREE_FORM_TOOL_ADD.getId() ||
+                    modeId === modes.FREE_FORM_TOOL_REMOVE.getId()
+                ) {
+                    this._gModes.setSelected('g-brush', false);
+                    this._gBrush.setSelected(modeId, false);
+                } else if (modeId === modes.CUSTOM.getId()) {
+                    const pl = this.context.presets.left;
+                    if (pl && pl.objectFactory && pl.objectFactory.factoryID) {
+                        this._gModes.setSelected('cg-shapes', false);
+                        this._shapeChoice.setSelected(pl.objectFactory.factoryID, false, false);
+                    }
+                } else {
+                    this._gModes.setSelected(`${modeId}`, false);
+                }
+
+                USER_INTERFACE.Status.show(mode.getDescription());
+            };
+
+            this.context.addHandler('mode-changed', modeChangeHandler);
         }, 2000);
     },
 
     updateSelectedFormat(format) {
         this.exportOptions.format = format;
+        this.context.setIOOption('format', format);
         this.setCacheOption('defaultIOFormat', format);
     },
 };

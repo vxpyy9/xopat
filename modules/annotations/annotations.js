@@ -38,7 +38,14 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 		this._init();
 		this.user = XOpatUser.instance();
         VIEWER_MANAGER.addHandler('before-open', () => this.setMode(this.Modes.AUTO));
-	}
+
+        this._editSelectionSyncDepth = 0;
+
+        this.addFabricHandler('annotation-selection-changed', (e) => {
+            if (this._editSelectionSyncDepth > 0) return;
+            this._syncEditModeToSelection(e?.viewer, e?.selected || [], e?.deselected || []);
+        });
+    }
 
     /**
      * Get fabric wrapper that is bound to a target viewer instance.
@@ -202,13 +209,167 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
         return fabric.export();
     }
 
-    async importViewerData(viewer, key, viewerTargetID, data) {
-        if (data === undefined || data === null) return;
+	async importViewerData(viewer, key, viewerTargetID, data) {
+		if (viewerTargetID && await this._applyPendingUnsavedSnapshot(viewer, viewerTargetID)) {
+			return;
+		}
+		if (data === undefined || data === null) return;
 
         const fabric = this.getFabric(viewer);
         const options = { inheritSession: true };
         await fabric.import(data, options);
     }
+
+	_getUnsavedSnapshotStorageKey() {
+		return `${this.uid}:_unsaved`;
+	}
+
+	_normalizeUnsavedSnapshot(data) {
+		if (!data) return null;
+
+		if (typeof data === "string") {
+			try {
+				data = JSON.parse(data);
+			} catch (e) {
+				console.warn("Failed to parse cached unsaved annotations snapshot.", e);
+				return null;
+			}
+		}
+
+		if (!data || typeof data !== "object") return null;
+
+		const session = data.session;
+		const presets = data.presets;
+		const viewers = {};
+
+		if (data.viewers && typeof data.viewers === "object") {
+			for (const [viewerId, viewerData] of Object.entries(data.viewers)) {
+				if (!viewerId || !viewerData || typeof viewerData !== "object") continue;
+
+				if (viewerData.data !== undefined && viewerData.data !== null) {
+					viewers[viewerId] = { data: viewerData.data };
+					continue;
+				}
+
+				if (Array.isArray(viewerData.objects)) {
+					viewers[viewerId] = { objects: viewerData.objects };
+				}
+			}
+		} else if (Array.isArray(data.objects)) {
+			const fallbackViewerId = VIEWER?.uniqueId || VIEWER_MANAGER?.viewers?.[0]?.uniqueId || "__active__";
+			viewers[fallbackViewerId] = { objects: data.objects };
+		}
+
+		return { session, presets, viewers };
+	}
+
+	async _buildUnsavedSnapshot() {
+		const viewers = (window.VIEWER_MANAGER?.viewers || []).filter(Boolean);
+		const byViewer = {};
+
+		this._suppressUnsavedExportReset = true;
+		try {
+			for (const viewer of viewers) {
+				const viewerId = viewer?.uniqueId;
+				if (!viewerId) continue;
+
+				try {
+					const fabric = this.getFabric(viewer);
+					const data = await fabric.export({ format: "native" }, true, false);
+					byViewer[viewerId] = { data };
+				} catch (e) {
+					console.warn(`Failed to cache unsaved annotations for viewer ${viewerId}.`, e);
+				}
+			}
+		} finally {
+			this._suppressUnsavedExportReset = false;
+		}
+
+		return {
+			session: APPLICATION_CONTEXT.sessionName,
+			viewers: byViewer,
+			presets: this.presets.toObject()
+		};
+	}
+
+	_clearUnsavedSnapshotState() {
+		this._pendingUnsavedSnapshots = {};
+		this._restoredUnsavedViewerIds = new Set();
+		this._loadedUnsavedPresets = false;
+	}
+
+	async _writeUnsavedSnapshot(data) {
+		try {
+			await this.cache.set('_unsaved', data);
+		} catch (e) {
+			console.warn('Failed to persist unsaved annotations into cache storage.', e);
+		}
+
+		const storageKey = this._getUnsavedSnapshotStorageKey();
+		if (!window.localStorage) return;
+
+		try {
+			if (data === undefined || data === null) {
+				window.localStorage.removeItem(storageKey);
+			} else {
+				window.localStorage.setItem(storageKey, JSON.stringify(data));
+			}
+		} catch (e) {
+			console.warn('Failed to persist unsaved annotations into local fallback storage.', e);
+		}
+	}
+
+	_readUnsavedSnapshot() {
+		let data;
+
+		try {
+			data = this.cache.get('_unsaved');
+		} catch (e) {
+			console.warn('Failed to read unsaved annotations from cache storage.', e);
+		}
+
+		if ((data === undefined || data === null) && window.localStorage) {
+			try {
+				const raw = window.localStorage.getItem(this._getUnsavedSnapshotStorageKey());
+				if (raw !== null) data = JSON.parse(raw);
+			} catch (e) {
+				console.warn('Failed to read unsaved annotations from local fallback storage.', e);
+			}
+		}
+
+		return this._normalizeUnsavedSnapshot(data);
+	}
+
+	async _applyPendingUnsavedSnapshot(viewer, viewerTargetID) {
+		if (!viewerTargetID) return false;
+		if (this._restoredUnsavedViewerIds?.has(viewerTargetID)) return true;
+
+		const pending = this._pendingUnsavedSnapshots?.[viewerTargetID];
+		if (!pending) return false;
+
+		const fabric = this.getFabric(viewer);
+
+		if (pending.data !== undefined && pending.data !== null) {
+			await fabric.import(pending.data, { format: 'native', inheritSession: true }, true);
+		} else if (Array.isArray(pending.objects)) {
+			await fabric._loadObjects({ objects: pending.objects }, true);
+			this.raiseEvent('import', {
+				owner: fabric,
+				options: {},
+				clear: true,
+				data: {
+					objects: pending.objects,
+					presets: this._loadedUnsavedPresets ? this.presets.toObject() : undefined
+				},
+			});
+		} else {
+			return false;
+		}
+
+		this._restoredUnsavedViewerIds.add(viewerTargetID);
+		delete this._pendingUnsavedSnapshots[viewerTargetID];
+		return true;
+	}
 
 	/**
 	 * Get the currently used data persistence storage module.
@@ -226,36 +387,43 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 		});
 
 		if (this._storeCacheSnapshots) {
+			this._pendingUnsavedSnapshots = this._pendingUnsavedSnapshots || {};
+			this._restoredUnsavedViewerIds = this._restoredUnsavedViewerIds || new Set();
 			await this._initIoFromCache();
 
 			let guard = 0; const _this=this;
 			function editRoutine(event, force=false) {
 				if (force || guard++ > 10) {
 					guard = 0;
-					//todo ensure cache can be non-persistent as a fallback
-					_this.cache.set('_unsaved', {
-                        // todo cache needs to store valid canvas ID to store to
-                        session: APPLICATION_CONTEXT.sessionName,
-                        objects: _this.fabric.toObject(true)?.objects,
-						presets: _this.presets.toObject()
-					});
+					void (async () => {
+						const snapshot = await _this._buildUnsavedSnapshot();
+						await _this._writeUnsavedSnapshot(snapshot);
+					})();
 				}
 			}
 
 			this.addHandler('export', () => {
-				_this.cache.set('_unsaved', null);
+				if (_this._suppressUnsavedExportReset) return;
+				_this._clearUnsavedSnapshotState();
+				void _this._writeUnsavedSnapshot(null);
 				guard = 0;
 			});
-            this.addFabricHandler('annotation-create', editRoutine);
-            this.addFabricHandler('annotation-delete', editRoutine);
-            this.addFabricHandler('annotation-replace', editRoutine);
-            this.addFabricHandler('annotation-edit', editRoutine);
+			this.addFabricHandler('annotation-create', editRoutine);
+			this.addFabricHandler('annotation-delete', editRoutine);
+			this.addFabricHandler('annotation-replace', editRoutine);
+			this.addFabricHandler('annotation-edit', editRoutine);
+			VIEWER_MANAGER.addHandler('viewer-create', event => {
+				const targetId = event?.uniqueId;
+				const viewer = targetId ? VIEWER_MANAGER.getViewer(targetId, false) || event?.viewer : event?.viewer;
+				if (!viewer || !targetId) return;
+				void _this._applyPendingUnsavedSnapshot(viewer, targetId);
+			});
 			window.addEventListener("beforeunload", event => {
 				if (guard === 0 || !_this.history.canUndo()) return;
 				editRoutine(null, true);
 			});
 
-			if (!this._avoidImport) {
+			if (!this._loadedUnsavedPresets) {
 				await this.loadPresetsCookieSnapshot();
 			}
 		}
@@ -265,47 +433,48 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 	async _initIoFromCache() {
 		if (!this._storeCacheSnapshots) return;
 
-		//todo verify how this behaves with override data import later from the data API
-		// also problem: if cache implemented over DB? we could add cache.local option that could
-		// explicitly request / enforce local storage usage
-		let data = this.cache.get("_unsaved");
-		let loaded = false;
-		if (data) {
-			try {
-				if (data?.session === APPLICATION_CONTEXT.sessionName) {
-					if (confirm("Your last annotation workspace was not saved! Load?")) {
-						//todo do not avoid import but import to a new layer!!!
-                        // todo multiplex delivery of annotations
-						this._avoidImport = true;
-						if (data?.presets) {
-							await this.presets.import(data?.presets, true);
-							loaded = true;
-						}
-						if (data?.objects) {
-                            await this.fabric._loadObjects({objects: data.objects}, true);
-							loaded = true;
-						}
-					}
-				}
-			} catch (e) {
-				console.error("Faulty cached data!", e);
+		this._pendingUnsavedSnapshots = this._pendingUnsavedSnapshots || {};
+		this._restoredUnsavedViewerIds = this._restoredUnsavedViewerIds || new Set();
+
+		const data = this._readUnsavedSnapshot();
+		if (!data) return;
+
+		if (data.session !== APPLICATION_CONTEXT.sessionName) {
+			await this._writeUnsavedSnapshot(null);
+			this._clearUnsavedSnapshotState();
+			return;
+		}
+
+		let accepted = false;
+		try {
+			accepted = confirm("Your last annotation workspace was not saved! Load cached annotations for this session?");
+		} catch (e) {
+			console.error("Faulty cached data!", e);
+		}
+
+		if (!accepted) {
+			await this._writeUnsavedSnapshot(null);
+			this._clearUnsavedSnapshotState();
+			return;
+		}
+
+		try {
+			if (data.presets) {
+				await this.presets.import(data.presets, true);
+				this._loadedUnsavedPresets = true;
 			}
 
-			if (loaded) {
-				this.raiseEvent('import', {
-                    owner: this.fabric,
-					options: {},
-					clear: true,
-					data: {
-						objects: data.objects,
-						presets: data.presets
-					},
-				});
-			} else {
-				this._avoidImport = false;
-				//do not erase cache upon load, still not saved anywhere
-				await this.cache.set('_unsaved', null);
+			this._pendingUnsavedSnapshots = { ...data.viewers };
+
+			for (const viewerTargetID of Object.keys(this._pendingUnsavedSnapshots)) {
+				const viewer = VIEWER_MANAGER.getViewer(viewerTargetID, false);
+				if (!viewer) continue;
+				await this._applyPendingUnsavedSnapshot(viewer, viewerTargetID);
 			}
+		} catch (e) {
+			this._clearUnsavedSnapshotState();
+			await this._writeUnsavedSnapshot(null);
+			console.error("Faulty cached data!", e);
 		}
 	}
 
@@ -577,7 +746,7 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 
 	/**
 	 * Undo action, handled by either a history implementation, or the current mode
-     * todo remove
+	 * todo remove
 	 */
 	undo() {
 		const can = this.mode.canUndo();
@@ -587,7 +756,7 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 
 	/**
 	 * Redo action, handled by either a history implementation, or the current mode
-     * todo remove
+	 * todo remove
 	 */
 	redo() {
 		const can = this.mode.canRedo();
@@ -781,7 +950,7 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 	setAuthorConfig(authorId, config) {
 		const authorsConfig = this.getAuthorsConfig();
 		const currentConfig = authorsConfig[authorId] || {};
-        authorsConfig[authorId] = {...currentConfig, ...config};
+		authorsConfig[authorId] = {...currentConfig, ...config};
 		this.setAuthorsConfig(authorsConfig);
 	}
 
@@ -985,7 +1154,15 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
     }
 
     _keyUpHandler(e) {
-        if (this.disabledInteraction || (e.target && (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA'))) return;
+        const isTextInput = e.target && (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA');
+
+        if (e.key === "Escape" && this.mode === this.Modes.EDIT_SELECTION) {
+            this.setMode(this.Modes.AUTO);
+            e.preventDefault?.();
+            return;
+        }
+
+        if (this.disabledInteraction || isTextInput) return;
 
         if (e.focusCanvas) {
             if (!e.ctrlKey && !e.altKey) {
@@ -998,8 +1175,6 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
                         instance.clearAnnotationSelection(true);
                     }
                     this.mode.discard(false);
-                    // todo move this to the annotation directly, or make the event sound less 'feature dependent'
-                    this.raiseEvent('annotation-board-save-request');
                     this.setMode(this.Modes.AUTO);
                     return;
                 }
@@ -1025,7 +1200,7 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
         console.warn("See list of factories available: missing", type, this.objectFactories);
         throw `No ${type} object factory registered. Annotations must contain at least a polygon implementation 
 in order to work. Did you maybe named the ${type} factory implementation differently other than '${type}'?`;
-    }
+	}
 
     /**
      * Enable or disable per author styling
@@ -1038,7 +1213,7 @@ in order to work. Did you maybe named the ${type} factory implementation differe
 
 	static _registerAnnotationFactory(FactoryClass, atRuntime) {
 		let _this = this.instance();
-        let factory = new FactoryClass(_this, _this.presets);
+		let factory = new FactoryClass(_this, _this.presets);
 		if (_this.objectFactories.hasOwnProperty(factory.factoryID)) {
 			throw `The factory ${FactoryClass} conflicts with another factory: ${factory.factoryID}`;
 		}
@@ -1069,6 +1244,168 @@ in order to work. Did you maybe named the ${type} factory implementation differe
             }
 		}
 	}
+
+    _ensureEditSelectionMode() {
+        if (!this.Modes.EDIT_SELECTION) {
+            this.setCustomModeUsed('EDIT_SELECTION', OSDAnnotations.StateEditSelection);
+        }
+        return this.Modes.EDIT_SELECTION;
+    }
+
+    isEditSelectionModeActive() {
+        return this.mode === this.Modes.EDIT_SELECTION;
+    }
+
+    getEditedFabricInstances() {
+        return Array.from(OSDAnnotations.FabricWrapper.instances()).filter((instance) =>
+            instance?.isEditing?.() || instance?.isOngoingEdit?.()
+        );
+    }
+
+    hasOngoingEdit() {
+        return this.getEditedFabricInstances().length > 0;
+    }
+
+    getEditedObject(viewer = undefined) {
+        const fabrics = viewer !== undefined
+            ? [this.getFabric(viewer)]
+            : this.getEditedFabricInstances();
+
+        for (const fabric of fabrics) {
+            const object = fabric?.getEditedObject?.() || fabric?.getOngoingEditObject?.();
+            if (object) return object;
+        }
+        return undefined;
+    }
+
+    getSelectedEditableObject(viewer = undefined) {
+        const fabric = viewer !== undefined ? this.getFabric(viewer) : this.fabric;
+        const selected = fabric?.getSelectedAnnotations?.() || [];
+        if (selected.length !== 1) return undefined;
+
+        const object = selected[0];
+        const factory = this.getAnnotationObjectFactory(object.factoryID);
+        if (!factory?.isEditable?.()) return undefined;
+
+        return object;
+    }
+
+    startEditModeForObject(object, viewer = undefined) {
+        if (!object) return false;
+
+        this._ensureEditSelectionMode();
+
+        const targetViewer = viewer || this.viewer;
+        const fabric = this.getFabric(targetViewer);
+        if (!fabric) return false;
+
+        if (!fabric.isAnnotationSelected?.(object)) {
+            fabric.selectAnnotation?.(object, true, true);
+        }
+
+        if (this.mode !== this.Modes.EDIT_SELECTION) {
+            this._preferredEditTarget = { viewer: targetViewer, object };
+            this.setMode(this.Modes.EDIT_SELECTION);
+            return !!(fabric.isEditingObject?.(object) || fabric.isOngoingEditOf?.(object));
+        }
+
+        return !!this._enterEditSelectionMode(targetViewer, object);
+    }
+
+    _runWithoutEditSelectionSync(callback) {
+        this._editSelectionSyncDepth = (this._editSelectionSyncDepth || 0) + 1;
+        try {
+            return callback?.();
+        } finally {
+            this._editSelectionSyncDepth = Math.max((this._editSelectionSyncDepth || 1) - 1, 0);
+        }
+    }
+
+    _isEditSelectionSyncSuspended() {
+        return (this._editSelectionSyncDepth || 0) > 0;
+    }
+
+    _enterEditSelectionMode(viewer = undefined, preferredObject = undefined) {
+        this._ensureEditSelectionMode();
+
+        const preferred = this._preferredEditTarget;
+        const targetViewer = viewer || preferred?.viewer || this.viewer;
+        const fabric = this.getFabric(targetViewer);
+        this._preferredEditTarget = undefined;
+
+        if (!fabric) return true;
+
+        const object = preferredObject || preferred?.object || this.getSelectedEditableObject(targetViewer);
+        if (!object) {
+            // explicit edit mode stays armed; user can select an annotation next
+            return true;
+        }
+
+        for (const instance of this.getEditedFabricInstances()) {
+            if (instance !== fabric) {
+                instance.requestEndSelectionEdit?.(true);
+                if (instance.isEditing?.() || instance.isOngoingEdit?.()) {
+                    instance.endSelectionEdit?.(true);
+                }
+            }
+        }
+
+        return !!fabric.beginSelectionEdit(object);
+    }
+
+    _exitEditSelectionMode(cancelOnly = true, temporary = false) {
+        const edited = this.getEditedFabricInstances();
+
+        for (const instance of edited) {
+            instance.requestEndSelectionEdit?.(cancelOnly);
+        }
+
+        for (const instance of edited) {
+            if (instance.isEditing?.() || instance.isOngoingEdit?.()) {
+                instance.endSelectionEdit?.(cancelOnly);
+            }
+        }
+
+        return true;
+    }
+
+    _syncEditModeToSelection(viewer, selected = [], deselected = []) {
+        if (this.mode !== this.Modes.EDIT_SELECTION) return;
+        if (this._isEditSelectionSyncSuspended?.()) return;
+
+        const fabric = viewer ? this.getFabric(viewer) : this.fabric;
+        if (!fabric) return;
+
+        const edited =
+            fabric.getEditedObject?.() ||
+            fabric.getOngoingEditObject?.();
+
+        const selectedList = Array.isArray(selected) && selected.length
+            ? selected
+            : (fabric.getSelectedAnnotations?.() || []);
+
+        let selectedEditable = undefined;
+        if (selectedList.length === 1) {
+            const candidate = selectedList[0];
+            const factory = this.getAnnotationObjectFactory(candidate.factoryID);
+            if (factory?.isEditable?.()) {
+                selectedEditable = candidate;
+            }
+        }
+
+        if (!selectedEditable) {
+            if (edited) {
+                fabric.endSelectionEdit?.(true);
+            }
+            return;
+        }
+
+        if (edited?.incrementId === selectedEditable.incrementId) {
+            return;
+        }
+
+        fabric.beginSelectionEdit?.(selectedEditable);
+    }
 };
 
 
@@ -1248,8 +1585,8 @@ OSDAnnotations.AnnotationState = class {
 		// if user selects mode by other method than hotkey, do not fire error on right click
 		// todo consider OSD filter event implementation and letting others decide whether to warn or not
 		if (noPresetError && (isLeftClick || !this.context._wasModeFiredByKey)) {
-            // todo outdated usage
-            this.context.viewer.raiseEvent('warn-user', {
+			// todo outdated usage
+			this.context.viewer.raiseEvent('warn-user', {
 				originType: "module",
 				originId: "annotations",
 				code: "W_NO_PRESET",
@@ -1284,7 +1621,7 @@ OSDAnnotations.AnnotationState = class {
 	 * @param {boolean} [withWarning=true] whether user should get warning in case action did not do anything
 	 */
 	discard(withWarning=true) {
-        this.context.fabric.deleteSelection(withWarning);
+		this.context.fabric.deleteSelection(withWarning);
 	}
 
 	/**
@@ -1475,7 +1812,7 @@ OSDAnnotations.StateFreeFormTool = class extends OSDAnnotations.AnnotationState 
 			return {object: o, asPolygon: result};
 		}
 		// This optimization breaks the logics, since click itself has changed the active annotation if nested
-        // const currentObject = this.context.fabric.canvas.getActiveObject();
+		// const currentObject = this.context.fabric.canvas.getActiveObject();
 		// let current = currentObject && getObjectAsCandidateForIntersectionTest(currentObject);
 		// if (current && OSDAnnotations.PolygonUtilities.polygonsIntersect(brushPolygon, current.asPolygon)) {
 		// 	return current;
@@ -1594,7 +1931,7 @@ OSDAnnotations.StateFreeFormToolAdd = class extends OSDAnnotations.StateFreeForm
 
 	handleClickDown(o, point, isLeftClick, objectFactory) {
 		if (!objectFactory) {
-            this.abortClick(isLeftClick, true);
+			this.abortClick(isLeftClick, true);
 			return;
 		}
 		this.context.fabric.clearAnnotationSelection(true);
@@ -1663,7 +2000,7 @@ OSDAnnotations.StateFreeFormToolRemove = class extends OSDAnnotations.StateFreeF
 
 	handleClickDown(o, point, isLeftClick, objectFactory) {
 		if (!objectFactory) {
-            this.abortClick(isLeftClick, true);
+			this.abortClick(isLeftClick, true);
 			return;
 		}
 		this.context.fabric.clearAnnotationSelection(true);
@@ -1883,4 +2220,39 @@ OSDAnnotations.StateCorrectionTool = class extends OSDAnnotations.StateFreeFormT
 	rejects(e) {
 		return e.code === "KeyZ";
 	}
+};
+
+
+OSDAnnotations.StateEditSelection = class extends OSDAnnotations.AnnotationState {
+    constructor(context) {
+        super(context, "edit-selection", "fa-pen-to-square", "Edit selected annotation");
+    }
+
+    setFromAuto() {
+        return this.context._enterEditSelectionMode();
+    }
+
+    setToAuto(temporary) {
+        return this.context._exitEditSelectionMode(true, temporary);
+    }
+
+    discard(withWarning = false) {
+        this.context._exitEditSelectionMode(true, false);
+    }
+
+    accepts(e) {
+        return false;
+    }
+
+    rejects(e) {
+        return false;
+    }
+
+    supportsEdgeNavigation() {
+        return false;
+    }
+
+    locksViewer(oldViewer, newViewer) {
+        return this.context.hasOngoingEdit() ? oldViewer === newViewer : false;
+    }
 };
