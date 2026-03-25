@@ -146,7 +146,7 @@ class MenuTab extends BaseComponent {
 
     _removeFocus() {
         this._focused = false;
-        this.headerButton?.setClass("type", "btn-neutral");
+        this.headerButton?.setClass("type", "");
         if (this.contentDiv){
             this.contentDiv.setClass("display", "hidden");
         }

@@ -47,7 +47,7 @@
         "faultyViz": "Invalid Data"
       },
       "shaders": {
-        "title": "Shaders Menu",
+        "title": "Visualization",
         "saveCookies": "Remember settings",
         "setBlending": "Set blending",
         "blendingExplain": "Toggle blending (default: mask)",

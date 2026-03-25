@@ -1412,7 +1412,7 @@ export function initXOpatLoader(ENV: XOpatCoreConfig, PLUGINS: Record<string, XO
         }
 
         /**
-         * Per-subclass state: 
+         * Per-subclass state:
          * (Own property on the subclass, so subclasses don't share.)
          */
         static __getBroadcastState(): Map<string, Map<OpenSeadragon.EventHandler<any>, { priority: number, userData: any, instances: Set<XOpatViewerSingleton> }>> {
@@ -2555,6 +2555,125 @@ form.submit();
                     ? activeVisualizationIndex
                     : undefined,
             );
+        },
+
+        getViewerIOContext: function (viewerOrUniqueId: any, stripSuffix = true) {
+            if (!viewerOrUniqueId || !window.VIEWER_MANAGER) return undefined;
+
+            let viewer: any;
+            try {
+                viewer = VIEWER_MANAGER.ensureViewer(viewerOrUniqueId);
+            } catch (_) {
+                return undefined;
+            }
+            if (!viewer) return undefined;
+
+            const index = VIEWER_MANAGER.getViewerIndex?.(viewer.uniqueId || viewer.id || '', false);
+            const refItem = viewer.scalebar?.getReferencedTiledImage?.() || viewer.world?.getItemAt?.(0);
+            const bgConfig = refItem?.getConfig?.('background') || {};
+            const itemConfig = refItem?.getConfig?.() || {};
+            const dataRef = itemConfig?.dataReference ?? bgConfig?.dataReference;
+            const dataRegistry = APPLICATION_CONTEXT?.config?.data || [];
+            const dataSpec = Number.isInteger(Number.parseInt(dataRef))
+                ? dataRegistry[dataRef]
+                : dataRef;
+
+            const fileName = typeof dataSpec === 'string' ? this.fileNameFromPath(dataSpec, stripSuffix) : '';
+            const uniqueId = String(viewer.uniqueId || '');
+            const title = bgConfig?.name || itemConfig?.name || fileName || uniqueId || `Viewer ${Number.isInteger(index) ? index + 1 : 1}`;
+            const label = `${title}${uniqueId && uniqueId !== title ? ` (${uniqueId})` : ''}`;
+
+            return {
+                viewer,
+                index: Number.isInteger(index) ? index : -1,
+                uniqueId,
+                title,
+                label,
+                fileName,
+                bgConfig,
+                itemConfig,
+                fileToken: uniqueId ? encodeURIComponent(uniqueId) : '',
+            };
+        },
+
+        getOpenedViewerIOContexts: function (stripSuffix = true) {
+            const viewers = Array.isArray(window.VIEWER_MANAGER?.viewers) ? VIEWER_MANAGER.viewers.filter(Boolean) : [];
+            return viewers
+                .map((viewer: any) => this.getViewerIOContext(viewer, stripSuffix))
+                .filter(Boolean);
+        },
+
+        parseExportFileName: function (fileName: string) {
+            const cleanName = String(fileName || '').trim();
+            const withoutExt = cleanName.replace(/\.[^.]+$/, '');
+            const exportPattern = /^(.*?)-(\d{4}-\d{2}-\d{2})-(all|annotations|presets)(-selection)?$/i;
+            const exportMatch = withoutExt.match(exportPattern);
+            const stem = exportMatch ? exportMatch[1] : withoutExt;
+            const viewerMatch = stem.match(/^(.*)--viewer-([^/]+)$/);
+
+            return {
+                fileName: cleanName,
+                withoutExt,
+                stem,
+                stemWithoutViewer: viewerMatch ? viewerMatch[1] : stem,
+                viewerToken: viewerMatch ? viewerMatch[2] : undefined,
+                date: exportMatch ? exportMatch[2] : undefined,
+                kind: exportMatch ? exportMatch[3] : undefined,
+                selectionSuffix: exportMatch ? exportMatch[4] : undefined,
+            };
+        },
+
+        resolveOpenedViewerFromExportFileName: function (fileName: string) {
+            const meta = this.parseExportFileName(fileName);
+            const targets = this.getOpenedViewerIOContexts();
+
+            if (!targets.length) {
+                return {
+                    target: null,
+                    reason: 'No open viewers available.',
+                    targets,
+                    meta,
+                };
+            }
+
+            if (meta.viewerToken) {
+                try {
+                    const uniqueId = decodeURIComponent(meta.viewerToken);
+                    const viewer = VIEWER_MANAGER.getViewer(uniqueId, false);
+                    if (viewer) {
+                        return {
+                            target: this.getViewerIOContext(viewer),
+                            reason: `Matched "${fileName}" to viewer ${uniqueId}.`,
+                            targets,
+                            meta,
+                            matchedBy: 'viewer-token',
+                        };
+                    }
+                    return {
+                        target: null,
+                        reason: `This file targets viewer ${uniqueId}, but that viewer is not currently open.`,
+                        targets,
+                        meta,
+                        matchedBy: 'viewer-token',
+                    };
+                } catch (error) {
+                    return {
+                        target: null,
+                        reason: `The viewer target encoded in "${fileName}" could not be decoded.`,
+                        targets,
+                        meta,
+                        matchedBy: 'viewer-token',
+                        error,
+                    };
+                }
+            }
+
+            return {
+                target: null,
+                reason: `No explicit viewer target was found in "${fileName}".`,
+                targets,
+                meta,
+            };
         }
     };
 
@@ -2698,7 +2817,59 @@ form.submit();
 
             // add initial viewer
             this.add(0);
-            this.setActive(0);
+            this.setActive(0, 'initial');
+        }
+
+        _resolveViewer(v: number | string | OpenSeadragon.Viewer | undefined | null) {
+            if (typeof v === "number") return this.viewers[v] || null;
+            if (typeof v === "string") return this.getViewer(v) || null;
+            return v || null;
+        }
+
+        _syncActiveViewState() {
+            this.viewers.forEach((vw: OpenSeadragon.Viewer, index: number) => {
+                const isActive = vw === this.active;
+                vw.container.classList.add("xo-viewer-host");
+                vw.container.classList.toggle("active", isActive);
+                vw.container.classList.toggle("xo-active-viewer", isActive);
+                vw.container.setAttribute("data-viewer-index", String(index + 1));
+                vw.container.setAttribute("data-active-viewer", isActive ? "true" : "false");
+                vw.container.setAttribute("aria-current", isActive ? "true" : "false");
+            });
+        }
+
+        _commitActive(v: OpenSeadragon.Viewer | null, reason = 'manager') {
+            const previousViewer = this.active;
+            if (previousViewer === v) {
+                this._syncActiveViewState();
+                return false;
+            }
+
+            this.active = v;
+            this._syncActiveViewState();
+
+            /**
+             * Raised whenever the manager changes which viewer is considered active.
+             * @param {OpenSeadragon.Viewer|null} viewer
+             * @param {OpenSeadragon.Viewer|null} previousViewer
+             * @param {string|undefined} uniqueId
+             * @param {string|undefined} previousUniqueId
+             * @param {number} index
+             * @param {number} previousIndex
+             * @param {string} reason
+             * @event active-viewer-changed
+             * @memberof VIEWER_MANAGER
+             */
+            this.raiseEvent('active-viewer-changed', {
+                viewer: v,
+                previousViewer,
+                uniqueId: v?.uniqueId,
+                previousUniqueId: previousViewer?.uniqueId,
+                index: v ? this.viewers.indexOf(v) : -1,
+                previousIndex: previousViewer ? this.viewers.indexOf(previousViewer) : -1,
+                reason,
+            });
+            return true;
         }
 
         _wire(v: OpenSeadragon.Viewer) {
@@ -2706,7 +2877,7 @@ form.submit();
             el.tabIndex = 0;
 
             //todo maybe rely on OSD events. Also, prevent changing the focus when a mouse is dragged and exits the area
-            const set = () => this.setActive(v);
+            const set = () => this.setActive(v, 'interaction');
             el.addEventListener("pointerdown", set);
             el.addEventListener("mouseenter", set);
             el.addEventListener("focusin", set);
@@ -2714,28 +2885,30 @@ form.submit();
             v.addHandler("canvas-press", set);
 
             v.addOnceHandler &&
-                v.addOnceHandler("destroy", () => {
-                    if (this.active === v) {
-                        this.active = this.viewers.find((x) => x !== v) || null;
-                    }
-                    this.viewers = this.viewers.filter((x) => x !== v);
-                });
+            v.addOnceHandler("destroy", () => {
+                if ((v as any).__managerDeleting) return;
+
+                const wasActive = this.active === v;
+                this.viewers = this.viewers.filter((x) => x !== v);
+
+                if (wasActive) {
+                    this._commitActive(this.viewers[0] || null, 'destroy');
+                } else {
+                    this._syncActiveViewState();
+                }
+            });
         }
 
         /**
          * Set the active viewer.
          * @param v - Index into the viewers array, unique ID, or a viewer instance.
-         * @returns {void}
+         * @param reason - Why the active viewer is being changed.
+         * @returns {boolean}
          */
-        setActive(v: number | string | OpenSeadragon.Viewer | undefined) {
-            if (typeof v === "number") v = this.viewers[v];
-            if (typeof v === "string") v = this.getViewer(v);
-            if (!v || this.active === v) return;
-            this.active = v as OpenSeadragon.Viewer;
-            // optional: add a CSS class to highlight active container
-            this.viewers.forEach((vw: OpenSeadragon.Viewer) =>
-                vw.container.classList.toggle("active", vw === this.active)
-            );
+        setActive(v: number | string | OpenSeadragon.Viewer | undefined, reason = 'manual') {
+            const viewer = this._resolveViewer(v);
+            if (!viewer) return false;
+            return this._commitActive(viewer as OpenSeadragon.Viewer, reason);
         }
 
         /**
@@ -2743,6 +2916,27 @@ form.submit();
          */
         get() {
             return this.active;
+        }
+
+        /**
+         * Get the currently active viewer index.
+         */
+        getActiveIndex() {
+            return this.active ? this.viewers.indexOf(this.active) : -1;
+        }
+
+        /**
+         * Get the currently active viewer unique ID.
+         */
+        getActiveUniqueId() {
+            return this.active?.uniqueId;
+        }
+
+        /**
+         * Check if the provided viewer reference resolves to the current active viewer.
+         */
+        isActive(viewerOrUniqueId: ViewerLikeItem) {
+            return !!viewerOrUniqueId && this._resolveViewer(viewerOrUniqueId) === this.active;
         }
 
         /**
@@ -3110,6 +3304,12 @@ form.submit();
 
             this.viewers.splice(index, 0, viewer);
             this._wire(viewer);
+
+            if (!this.active) {
+                this._commitActive(viewer, 'add');
+            } else {
+                this._syncActiveViewState();
+            }
         }
 
         /**
@@ -3285,6 +3485,7 @@ form.submit();
 
             try {
                 delete viewer.__cachedUUID;
+                (viewer as any).__managerDeleting = true;
                 viewer.destroy();
             } catch (e) {
                 console.warn('Viewer destroy failed', e);
@@ -3301,7 +3502,9 @@ form.submit();
             }
 
             if (this.active === viewer) {
-                this.active = this.viewers[0] || null;
+                this._commitActive(this.viewers[0] || null, 'delete');
+            } else {
+                this._syncActiveViewState();
             }
 
             const stores = (viewer as any)[STORE_TOKEN];

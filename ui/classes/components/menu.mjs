@@ -46,9 +46,8 @@ class Menu extends BaseComponent {
             this.registerNamespace(namespace);
         }
 
-        // todo overflow needs to react on the direction of the menu!! header overflow would be nice but it shows scroll bars even if it fits
         this.header = new ui.Join({ id: this.id + "-header", style: ui.Join.STYLE.HORIZONTAL});
-        this.body = new ui.Div({ id: this.id + "-body", extraClasses: {height: "h-full", width: "w-full", overflow: "overflow-y-auto"} });
+        this.body = new ui.Div({ id: this.id + "-body", extraClasses: {height: "h-full", width: "w-full"} });
 
         for (let i of this._children) {
             this.addTab(i);

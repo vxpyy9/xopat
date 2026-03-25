@@ -491,17 +491,36 @@ OSDAnnotations.AnnotationObjectFactory = class {
         controls.comments = commentsControl;
 
         ofObject.controls = controls;
-        ofObject.hasControls = true;
+        ofObject.hasControls = false;
         ofObject.hasBorders = false;
+    }
+
+    __cloneValue(value) {
+        if (value === null || value === undefined) return value;
+        if (typeof value !== "object") return value;
+
+        try {
+            if (typeof structuredClone === "function") {
+                return structuredClone(value);
+            }
+        } catch (e) {
+            // fallback below
+        }
+
+        try {
+            return JSON.parse(JSON.stringify(value));
+        } catch (e) {
+            return value;
+        }
     }
 
     __copyProps(ofObject, toObject, defaultProps, additionalProps) {
         for (let prop of defaultProps) {
-            toObject[prop] = ofObject[prop];
+            toObject[prop] = this.__cloneValue(ofObject[prop]);
         }
         if (additionalProps?.length > 0) {
             for (let prop of additionalProps) {
-                toObject[prop] = ofObject[prop];
+                toObject[prop] = this.__cloneValue(ofObject[prop]);
             }
         }
         this.__copyInnerProps(ofObject, toObject);
@@ -509,14 +528,13 @@ OSDAnnotations.AnnotationObjectFactory = class {
 
     __copyInnerProps(ofObject, toObject) {
         for (let prop of this.exports()) {
-            toObject[prop] = ofObject[prop];
+            toObject[prop] = this.__cloneValue(ofObject[prop]);
         }
         for (let prop of this.exportsGeometry()) {
-            toObject[prop] = ofObject[prop];
+            toObject[prop] = this.__cloneValue(ofObject[prop]);
         }
         toObject.type = ofObject.type; //always
     }
-
 
     /**
      * Create an object at given point with a given strategy
@@ -632,6 +650,7 @@ OSDAnnotations.AnnotationObjectFactory = class {
      * Update the object coordinates by finishing edit() call (this is guaranteed to happen at least once before)
      * @param {fabric.Object} theObject recalculate the object that has been modified
      * @param {boolean} [ignoreReplace=false] skip the fabric.replaceAnnotation call
+     * @return {fabric.Object} modified or original object
      */
     recalculate(theObject, ignoreReplace=false) {
     }
@@ -762,25 +781,38 @@ OSDAnnotations.AnnotationObjectFactory = class {
             let newStroke = theObject.strokeWidth * 5;
             let newStrokeDashArray = [newStroke * 3, newStroke * 2];
 
+            const center = theObject.getCenterPoint();
+
             clonedObj.set({
                 fill: '',
+                // border color === control UI color, stroke == class
                 stroke: theObject.borderColor,
                 strokeWidth: newStroke,
                 strokeDashArray: newStrokeDashArray,
                 strokeLineCap: 'round',
-                strokeUniform: true,
-                left: clonedObj.left + clonedObj.width / 2 + theObject.strokeWidth / 2,
-                top: clonedObj.top + clonedObj.height / 2 + theObject.strokeWidth / 2,
+                strokeUniform: !!theObject.strokeUniform,
+
                 originX: 'center',
                 originY: 'center',
+                left: center.x,
+                top: center.y,
+
+                angle: theObject.angle || 0,
+                scaleX: theObject.scaleX ?? 1,
+                scaleY: theObject.scaleY ?? 1,
+                flipX: !!theObject.flipX,
+                flipY: !!theObject.flipY,
+
                 selectable: false,
                 evented: false,
                 opacity: 1,
                 hasControls: false,
                 hasBorders: false,
                 isHighlight: true,
-                excludeFromExport: true
+                excludeFromExport: true,
+                objectCaching: false
             });
+            clonedObj.setCoords();
             delete clonedObj.type;
 
             return clonedObj;

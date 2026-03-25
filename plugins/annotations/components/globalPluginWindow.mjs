@@ -29,20 +29,7 @@ export const globalPluginWindowMethods = {
             this._refreshAllBoardPanels();
         });
 
-        this.context.addHandler('annotation-board-save-request', (e) => {
-            const viewerId = e?.viewer ? this._resolveViewerId(e.viewer) : undefined;
-            const cancelOnly = !!e?.cancelOnly;
-
-            if (viewerId) {
-                this._getViewerUI(viewerId)?.boardPanel?.commitEdit(cancelOnly);
-            } else {
-                VIEWER_MANAGER.viewers.forEach((viewer) => {
-                    this._getViewerUI(viewer.uniqueId)?.boardPanel?.commitEdit(cancelOnly);
-                });
-            }
-        });
-
-        this.context.addHandler('annotation-board-refresh-request', (e) => {
+        this.context.addHandler('annotation-loaded', (e) => {
             const viewerId = e?.viewer ? this._resolveViewerId(e.viewer) : undefined;
             if (viewerId) {
                 this._getViewerUI(viewerId)?.boardPanel?.requestRender();
@@ -50,6 +37,18 @@ export const globalPluginWindowMethods = {
                 this._refreshAllBoardPanels();
             }
         });
+
+        const refreshBoardForViewer = (e) => {
+            const viewerId = e?.viewer ? this._resolveViewerId(e.viewer) : undefined;
+            if (viewerId) {
+                this._getViewerUI(viewerId)?.boardPanel?.requestRender();
+            } else {
+                this._refreshAllBoardPanels();
+            }
+        };
+
+        this.context.addFabricHandler('annotation-edit', refreshBoardForViewer);
+        this.context.addFabricHandler('annotation-edit-end', refreshBoardForViewer);
 
         const globalSideRefresh = () => {
             this._refreshAllBoardPanels();

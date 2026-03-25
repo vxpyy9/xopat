@@ -576,22 +576,31 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 	 * @param {OSDAnnotations.AnnotationState} mode
 	 * @param {boolean} [force=false]
 	 */
-	setMode(mode, force=false) {
-		if (this.disabledInteraction || mode === this.mode) return;
+    setMode(mode, force=false) {
+        if (this.disabledInteraction || mode === this.mode) return;
 
-        for (let instance of OSDAnnotations.FabricWrapper.instances()) {
-            instance._doppelgangerClear();
+        if (this.mode === this.Modes.AUTO) {
+            this._setModeFromAuto(mode);
+        } else if (mode !== this.Modes.AUTO || force) {
+            this._setModeToAuto(true);
+            this._setModeFromAuto(mode);
+        } else {
+            this._setModeToAuto(false);
         }
 
-		if (this.mode === this.Modes.AUTO) {
-			this._setModeFromAuto(mode);
-		} else if (mode !== this.Modes.AUTO || force) {
-			this._setModeToAuto(true);
-			this._setModeFromAuto(mode);
-		} else {
-			this._setModeToAuto(false);
-		}
-	}
+        const enteringEditSelection = this.mode === this.Modes.EDIT_SELECTION;
+
+        for (let instance of OSDAnnotations.FabricWrapper.instances()) {
+            const keepActiveEditDoppelganger = enteringEditSelection &&
+                (instance?.isEditing?.() || instance?.isOngoingEdit?.());
+
+            if (keepActiveEditDoppelganger) {
+                continue;
+            }
+
+            instance._doppelgangerClear();
+        }
+    }
 
 	/**
 	 * Set current mode by mode id
@@ -1156,12 +1165,6 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
     _keyUpHandler(e) {
         const isTextInput = e.target && (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA');
 
-        if (e.key === "Escape" && this.mode === this.Modes.EDIT_SELECTION) {
-            this.setMode(this.Modes.AUTO);
-            e.preventDefault?.();
-            return;
-        }
-
         if (this.disabledInteraction || isTextInput) return;
 
         if (e.focusCanvas) {
@@ -1266,6 +1269,20 @@ in order to work. Did you maybe named the ${type} factory implementation differe
         return this.getEditedFabricInstances().length > 0;
     }
 
+    finishSelectionEdit(viewer = undefined, cancelOnly = false) {
+        const fabrics = viewer !== undefined
+            ? [this.getFabric(viewer)]
+            : this.getEditedFabricInstances();
+
+        let handled = false;
+        for (const fabric of fabrics.filter(Boolean)) {
+            if (fabric.isEditing?.() || fabric.isOngoingEdit?.()) {
+                handled = !!fabric.endSelectionEdit?.(cancelOnly) || handled;
+            }
+        }
+        return handled;
+    }
+
     getEditedObject(viewer = undefined) {
         const fabrics = viewer !== undefined
             ? [this.getFabric(viewer)]
@@ -1354,18 +1371,7 @@ in order to work. Did you maybe named the ${type} factory implementation differe
     }
 
     _exitEditSelectionMode(cancelOnly = true, temporary = false) {
-        const edited = this.getEditedFabricInstances();
-
-        for (const instance of edited) {
-            instance.requestEndSelectionEdit?.(cancelOnly);
-        }
-
-        for (const instance of edited) {
-            if (instance.isEditing?.() || instance.isOngoingEdit?.()) {
-                instance.endSelectionEdit?.(cancelOnly);
-            }
-        }
-
+        this.finishSelectionEdit(undefined, cancelOnly);
         return true;
     }
 
@@ -1395,7 +1401,7 @@ in order to work. Did you maybe named the ${type} factory implementation differe
 
         if (!selectedEditable) {
             if (edited) {
-                fabric.endSelectionEdit?.(true);
+                this.finishSelectionEdit(viewer, true);
             }
             return;
         }
@@ -2233,7 +2239,7 @@ OSDAnnotations.StateEditSelection = class extends OSDAnnotations.AnnotationState
     }
 
     setToAuto(temporary) {
-        return this.context._exitEditSelectionMode(true, temporary);
+        return this.context._exitEditSelectionMode(false, temporary);
     }
 
     discard(withWarning = false) {

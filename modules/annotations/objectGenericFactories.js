@@ -82,13 +82,21 @@ OSDAnnotations.Rect = class extends OSDAnnotations.AnnotationObjectFactory {
     edit(theObject) {
         this._left = theObject.left;
         this._top = theObject.top;
+
+        theObject.controls = fabric.Object.prototype.controls;
         theObject.set({
             hasControls: true,
+            hasBorders: true,
             lockMovementX: false,
             lockMovementY: false,
+            lockScalingX: false,
+            lockScalingY: false,
+            lockSkewingX: true,
+            lockSkewingY: true,
             hasRotatingPoint: false,
             lockRotation: true
         });
+        theObject.setControlsVisibility?.({ mtr: false });
     }
 
     recalculate(theObject, ignoreReplace=false) {
@@ -106,6 +114,7 @@ OSDAnnotations.Rect = class extends OSDAnnotations.AnnotationObjectFactory {
         if (!ignoreReplace) {
             this._context.fabric.replaceAnnotation(theObject, newObject);
         }
+        return newObject;
     }
 
     initCreate(x, y, isLeftClick) {
@@ -140,11 +149,14 @@ OSDAnnotations.Rect = class extends OSDAnnotations.AnnotationObjectFactory {
     finishDirect() {
         let obj = this.getCurrentObject();
         if (!obj) return true;
-        //todo fix? just promote did not let me to select the object this._context.promoteHelperAnnotation(obj);
-        this._context.fabric.deleteHelperAnnotation(obj);
-        if (obj.width === 0 || obj.height === 0) return true;
 
-        this._context.fabric.addAnnotation(obj);
+        if (obj.width === 0 || obj.height === 0) {
+            this._context.fabric.deleteHelperAnnotation(obj);
+            this._current = undefined;
+            return true;
+        }
+
+        this._context.fabric.promoteHelperAnnotation(obj);
         this._current = undefined;
         return true;
     }
@@ -309,13 +321,23 @@ OSDAnnotations.Ellipse = class extends OSDAnnotations.AnnotationObjectFactory {
     edit(theObject) {
         this._left = theObject.left;
         this._top = theObject.top;
+
+        theObject.controls = fabric.Object.prototype.controls;
         theObject.set({
             hasControls: true,
+            hasBorders: true,
             lockMovementX: false,
             lockMovementY: false,
+            lockScalingX: false,
+            lockScalingY: false,
+            lockSkewingX: true,
+            lockSkewingY: true,
             hasRotatingPoint: false,
             lockRotation: true
         });
+        theObject.setControlsVisibility?.({ mtr: false });
+
+        this._context.fabric.rerender();
     }
 
     recalculate(theObject, ignoreReplace = false) {
@@ -347,6 +369,7 @@ OSDAnnotations.Ellipse = class extends OSDAnnotations.AnnotationObjectFactory {
         if (!ignoreReplace) {
             this._context.fabric.replaceAnnotation(theObject, newObject);
         }
+        return newObject;
     }
 
     initCreate(x, y, isLeftClick = true) {
@@ -394,9 +417,14 @@ OSDAnnotations.Ellipse = class extends OSDAnnotations.AnnotationObjectFactory {
     finishDirect() {
         let obj = this.getCurrentObject();
         if (!obj) return true;
-        //todo fix? just promote did not let me to select the object this._context.promoteHelperAnnotation(obj);
-        this._context.fabric.deleteHelperAnnotation(obj);
-        this._context.fabric.addAnnotation(obj);
+
+        if (obj.rx === 0 || obj.ry === 0) {
+            this._context.fabric.deleteHelperAnnotation(obj);
+            this._current = undefined;
+            return true;
+        }
+
+        this._context.fabric.promoteHelperAnnotation(obj);
         this._current = undefined;
         return true;
     }
@@ -560,7 +588,7 @@ OSDAnnotations.Text = class extends OSDAnnotations.AnnotationObjectFactory {
                 type: this.type,
                 factoryID: this.factoryID,
                 selectable: true,
-                hasControls: true,
+                hasControls: false,
                 lockUniScaling: true,
                 stroke: 'white',
                 fill: 'black',
@@ -579,7 +607,7 @@ OSDAnnotations.Text = class extends OSDAnnotations.AnnotationObjectFactory {
                 type: this.type,
                 factoryID: this.factoryID,
                 selectable: true,
-                hasControls: true,
+                hasControls: false,
                 lockUniScaling: true,
                 stroke: 'white',
                 fill: 'black',
@@ -689,11 +717,18 @@ OSDAnnotations.Text = class extends OSDAnnotations.AnnotationObjectFactory {
         this._top = theObject.top;
         this._origText = (theObject.text || "").trim();
 
+        theObject.controls = fabric.IText?.prototype?.controls || fabric.Object.prototype.controls;
         theObject.set({
+            hasControls: true,
+            hasBorders: true,
             lockMovementX: false,
             lockMovementY: false,
+            lockScalingX: false,
+            lockScalingY: false,
+            lockRotation: true,
             editable: true
         });
+        theObject.setControlsVisibility({ mtr: false });
     }
 
     getCreationRequiredMouseDragDurationMS() {
@@ -713,7 +748,7 @@ OSDAnnotations.Text = class extends OSDAnnotations.AnnotationObjectFactory {
             theObject.text = theObject.meta?.category;
         }
 
-        let newText = this._context.fabric.getAnnotationDescription(theObject, "category", true, false);
+        let newText = theObject.text || this._context.fabric.getAnnotationDescription(theObject, "category", true, false);
         theObject.set({ left: this._left, top: this._top, scaleX: 1, scaleY: 1, lockMovementX: true, lockMovementY: true, editable: false});
 
         let newObject = this.copy(theObject, {
@@ -741,6 +776,7 @@ OSDAnnotations.Text = class extends OSDAnnotations.AnnotationObjectFactory {
         if (!ignoreReplace) {
             this._context.fabric.replaceAnnotation(theObject, newObject);
         }
+        return newObject;
     }
 
     initCreate(x, y, isLeftClick = true) {
@@ -923,6 +959,7 @@ OSDAnnotations.Point = class extends OSDAnnotations.Ellipse {
         if (!ignoreReplace) {
             this._context.fabric.replaceAnnotation(theObject, newObject);
         }
+        return newObject;
     }
 
     instantCreate(screenPoint, isLeftClick = true) {
@@ -1141,9 +1178,12 @@ OSDAnnotations.ExplicitPointsObjectFactory = class extends OSDAnnotations.Annota
         theObject.controls = fabric.Object.prototype.controls;
         theObject.strokeWidth = this._presets.getCommonProperties().strokeWidth;
 
-        if (!theObject.points.every(
-            (value, index) => value === this._origPoints[index])) {
-            let newObject = this.copy(theObject, theObject.points);
+        let newObject = undefined;
+
+        if (theObject.points.length !== this._origPoints.length ||
+            !theObject.points.every((value, index) => value === this._origPoints[index])
+        ) {
+            newObject = this.copy(theObject, theObject.points);
             theObject.points = this._origPoints;
 
             if (!ignoreReplace) {
@@ -1152,6 +1192,7 @@ OSDAnnotations.ExplicitPointsObjectFactory = class extends OSDAnnotations.Annota
         }
         this._origPoints = null;
         this._initialize(false);
+        return newObject || theObject;
     }
 
     translate(theObject, pos, ignoreReplace=false) {
@@ -1501,9 +1542,11 @@ OSDAnnotations.Line = class extends OSDAnnotations.AnnotationObjectFactory {
         theObject.controls = fabric.Object.prototype.controls;
         theObject.strokeWidth = this._presets.getCommonProperties().strokeWidth;
 
+        let newObject = undefined;
+
         if (!theObject.x1 != this._origPoints[0] || theObject.y1 != this._origPoints[1] ||
             theObject.x2 != this._origPoints[2] || theObject.y2 != this._origPoints[3]) {
-            let newObject = this.copy(theObject);
+            newObject = this.copy(theObject);
             theObject.x1 = this._origPoints[0];
             theObject.y1 = this._origPoints[1];
             theObject.x2 = this._origPoints[2];
@@ -1514,6 +1557,7 @@ OSDAnnotations.Line = class extends OSDAnnotations.AnnotationObjectFactory {
             }
         }
         this._origPoints = null;
+        return newObject || theObject;
     }
 
     initCreate(x, y, isLeftClick = true) {
@@ -2169,20 +2213,26 @@ OSDAnnotations.Multipolygon = class extends OSDAnnotations.AnnotationObjectFacto
         }
     }
 
-    recalculate(theObject) {
+    recalculate(theObject, ignoreReplace=false) {
         theObject.controls = fabric.Object.prototype.controls;
         theObject.strokeWidth = this._presets.getCommonProperties().strokeWidth;
 
+        let newObject = theObject;
+
         if (this._pointsChanged) {
-            const newObject = this.copy(theObject, theObject.points);
+            newObject = this.copy(theObject, theObject.points);
 
             const originalPointsCopy = this._origPoints.map(r => r.map(p => ({ x: p.x, y: p.y })));
             theObject.points = originalPointsCopy;
             this.setPoints(theObject, originalPointsCopy);
 
-            this._context.fabric.replaceAnnotation(theObject, newObject);
+            if (!ignoreReplace) {
+                this._context.fabric.replaceAnnotation(theObject, newObject);
+            }
         }
+
         this._origPoints = null;
         this._pointsChanged = false;
+        return newObject;
     }
 };

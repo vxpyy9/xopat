@@ -73,8 +73,8 @@ Raised after import completes or import input is rejected.
 The viewer-scoped events are emitted on contextualized instance of particular
 canvas that belongs to a specific viewer.
 
-##### `annotation-board-refresh-request` | `{ viewer: OpenSeadragon.Viewer, clear: boolean, reason: 'import' | 'load-objects' }`
-Raised when the annotation board should refresh after objects are imported or loaded.
+##### `annotation-loaded` | `{ viewer: OpenSeadragon.Viewer, clear: boolean, reason: 'import' | 'load-objects' }`
+Raised when the annotations were imported/loaded in a bigger chunk.
 
 ##### `annotation-board-save-request` | `{ viewer: OpenSeadragon.Viewer }`
 
@@ -106,6 +106,9 @@ Cancelable event raised before replacing one full annotation with another.
 
 ##### `annotation-replace` | `{ previous: fabric.Object, next: fabric.Object, boardIndex: number | undefined }`
 Raised after a full annotation replacement finishes.
+
+#### `annotation-edit`, `annotation-before-edit`, `annotation-edit-end`
+Edit lifecycle events, todo: docs.
 
 ##### `annotation-before-replace-doppelganger` | `{ object: fabric.Object, isCancelled: () => boolean, setCancelled: (cancelled: boolean) => void }`
 Cancelable event raised before a temporary doppelganger swap.
@@ -155,9 +158,6 @@ Raised when the current mode does not handle a primary-button release.
 ---
 
 ### Notes (v2 -> v3)
-
-- `annotation-edit`, `annotation-before-edit`, and comment related events are not fired here, but fired ON the module class by the annotation plugin.
-    - TODO: consider moving these events to the module class via APIfied manner
 - `history-select`, `history-open`, `history-swap`, `history-close` events are not supported - rely on global app history events.
 - `canvas-nonprimary-release-not-handled` is replaced by `nonprimary-release-not-handled`, and `canvas-release-not-handled` not supported
 - `active-layer-changed` now returns the actual `layer` object, not `{ id }`.

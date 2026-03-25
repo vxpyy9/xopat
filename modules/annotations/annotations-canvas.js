@@ -275,7 +275,7 @@ OSDAnnotations.FabricWrapper = class extends XOpatViewerSingleton {
 
         if (imported) {
             // todo event name/logic
-            this.raiseEvent('annotation-board-refresh-request', {
+            this.raiseEvent('annotation-loaded', {
                 viewer: this.viewer,
                 clear,
                 reason: 'import'
@@ -848,13 +848,26 @@ OSDAnnotations.FabricWrapper = class extends XOpatViewerSingleton {
             return this.isEditingObject?.(object) || this.isOngoingEditOf?.(object) || false;
         }
 
+        let cancelFlag = false;
+        try {
+            this.raiseEvent('annotation-before-edit', {
+                object: object,
+                isCancelled: () => cancelFlag,
+                setCancelled: (cancelled) => {cancelFlag = cancelled},
+            });
+        } catch (e) { console.error('Error in annotation-before-edit event handler: ', e); }
+        if (cancelFlag) return false;
+
         this._selectionEditTransition = true;
         try {
             const current =
                 this.getEditedObject?.() ||
                 this.getOngoingEditObject?.();
 
-            if (current?.incrementId === object.incrementId) {
+            if (
+                current?.incrementId === object.incrementId ||
+                current?.internalID === object.internalID
+            ) {
                 return true;
             }
 
@@ -863,27 +876,38 @@ OSDAnnotations.FabricWrapper = class extends XOpatViewerSingleton {
                 this.endSelectionEdit(true);
             }
 
+            const editableObject = factory.copy(object);
+
             this._boardEditSelection = {
                 incrementId: object.incrementId,
-                internalID: object.internalID
+                internalID: object.internalID,
+                originalObject: object
             };
 
             this.module.setMouseOSDInteractive?.(false);
 
             this.module._runWithoutEditSelectionSync?.(() => {
-                if (!this.isAnnotationSelected?.(object)) {
-                    this.selectAnnotation?.(object, true, true);
+                // temporary swap, no history
+                this.replaceAnnotation(object, editableObject, true);
+
+                const editTarget =
+                    this.getEditedObject?.() ||
+                    editableObject;
+
+                if (!this.isAnnotationSelected?.(editTarget)) {
+                    this.selectAnnotation?.(editTarget, true, true);
                 }
+
+                this.removeHighlight();
+                editTarget.set?.({ hoverCursor: 'move' });
+
+                factory.edit(editTarget);
+                editTarget.setCoords();
+
+                const payload = { object: editTarget, viewer: this.viewer };
+                this.raiseEvent('annotation-edit', payload);
             });
 
-            this.removeHighlight?.();
-            object.set?.({ hoverCursor: 'move' });
-
-            factory.edit?.(object);
-
-            const payload = { object, viewer: this.viewer };
-            this.raiseEvent('annotation-edit', payload);
-            this.module.raiseEvent('annotation-edit', payload);
             return true;
         } finally {
             this._selectionEditTransition = false;
@@ -891,46 +915,114 @@ OSDAnnotations.FabricWrapper = class extends XOpatViewerSingleton {
     }
 
     endSelectionEdit(cancelOnly = false) {
-        const object =
+        const editedObject =
             this.getEditedObject?.() ||
             this.getOngoingEditObject?.();
 
-        if (!object) {
+        const originalObject = this._boardEditSelection?.originalObject;
+
+        if (!editedObject) {
             this._boardEditSelection = undefined;
             this.module.setMouseOSDInteractive(true);
             return false;
         }
 
-        try {
-            object.set?.({ hoverCursor: 'default' });
+        const factory = this.module.getAnnotationObjectFactory(
+            originalObject?.factoryID || editedObject.factoryID
+        );
+        const wasSelected = this.isAnnotationSelected(editedObject);
+        let resolvedObject = editedObject;
 
-            if (!cancelOnly) {
-                const factory = this.module.getAnnotationObjectFactory(object.factoryID);
-                factory?.recalculate?.(object);
+        this._selectionEditTransition = true;
+        try {
+            editedObject.set({ hoverCursor: 'default' });
+
+            try {
+                this.__programmaticClear = true;
+                this.canvas.discardActiveObject();
+                this.canvas._currentTransform = null;
+                this.canvas._groupSelector = null;
+            } catch (error) {
+                console.warn(error);
+            }
+
+            if (cancelOnly) {
+                if (originalObject && originalObject !== editedObject) {
+                    // restore original, no history
+                    this.replaceAnnotation(editedObject, originalObject, true);
+                    resolvedObject =
+                        this.canvas.getObjects().find(item => item?.internalID === originalObject.internalID)
+                        || this.findObjectOnCanvasByIncrementId(originalObject.incrementId)
+                        || originalObject;
+                } else {
+                    factory?.renderAllControls?.(editedObject);
+                    editedObject.hasBorders = false;
+                    editedObject.hasControls = true;
+                    editedObject.setCoords?.();
+                    resolvedObject = editedObject;
+                }
+            } else {
+                // finalize through the factory, but do not replace yet
+                const finalObject = factory?.recalculate(editedObject, true);
+
+                if (originalObject && originalObject !== editedObject) {
+                    // first restore original without history
+                    this.replaceAnnotation(editedObject, originalObject, true);
+
+                    const restoredOriginal =
+                        this.canvas.getObjects().find(item => item?.internalID === originalObject.internalID)
+                        || this.findObjectOnCanvasByIncrementId(originalObject.incrementId)
+                        || originalObject;
+
+                    if (finalObject && finalObject !== restoredOriginal) {
+                        // now record exactly one replace in history
+                        this.replaceAnnotation(restoredOriginal, finalObject, false);
+
+                        resolvedObject =
+                            this.canvas.getObjects().find(item => item?.internalID === restoredOriginal.internalID)
+                            || this.findObjectOnCanvasByIncrementId(restoredOriginal.incrementId)
+                            || finalObject;
+                    } else {
+                        resolvedObject = restoredOriginal;
+                    }
+                } else if (finalObject && finalObject !== editedObject) {
+                    this.replaceAnnotation(editedObject, finalObject, false);
+                    resolvedObject =
+                        this.canvas.getObjects().find(item => item?.internalID === editedObject.internalID)
+                        || this.findObjectOnCanvasByIncrementId(editedObject.incrementId)
+                        || finalObject;
+                } else {
+                    resolvedObject = editedObject;
+                }
+            }
+
+            if (wasSelected && resolvedObject?.canvas) {
+                this.module._runWithoutEditSelectionSync?.(() => {
+                    this.selectAnnotation(resolvedObject, true, true);
+                });
+            } else {
+                this.canvas.requestRenderAll();
             }
         } catch (error) {
             console.warn(error);
+        } finally {
+            this._boardEditSelection = undefined;
+            this.module.setMouseOSDInteractive?.(true);
+            this._selectionEditTransition = false;
         }
 
-        this._boardEditSelection = undefined;
-        this.module.setMouseOSDInteractive(true);
-
         const payload = {
-            object,
+            object: resolvedObject,
             viewer: this.viewer,
             cancelOnly: !!cancelOnly
         };
         this.raiseEvent('annotation-edit-end', payload);
-        this.module.raiseEvent('annotation-edit-end', payload);
         return true;
     }
 
     requestEndSelectionEdit(cancelOnly = false) {
-        const payload = {
-            viewer: this.viewer,
-            cancelOnly: !!cancelOnly
-        };
-        this.module.raiseEvent('annotation-board-save-request', payload);
+        return this.module.finishSelectionEdit(this.viewer, cancelOnly)
+            || this.endSelectionEdit(cancelOnly);
     }
 
 // backward-compatible aliases
@@ -1052,11 +1144,29 @@ OSDAnnotations.FabricWrapper = class extends XOpatViewerSingleton {
         const layer = object.layerID ? this.getLayer(String(object.layerID)) : null;
         const shouldShow = annotationsEnabled && (!layer || layer.visible !== false);
 
+        const factory = this.module.getAnnotationObjectFactory(object.factoryID);
+        const isEditable = !!factory?.isEditable();
+        const isEdited = !!(this.isEditingObject(object) || this.isOngoingEditOf(object));
+
         object.visible = !!shouldShow;
         object.evented = !!shouldShow;
         object.selectable = !!shouldShow;
 
-        if (shouldShow) {
+        if (!shouldShow) {
+            object.lockMovementX = true;
+            object.lockMovementY = true;
+            object.lockRotation = true;
+            object.lockScalingFlip = true;
+            object.lockScalingX = true;
+            object.lockScalingY = true;
+            object.lockSkewingX = true;
+            object.lockSkewingY = true;
+            object.lockUniScaling = true;
+            object.hasControls = false;
+            return;
+        }
+
+        if (isEditable && isEdited) {
             object.lockMovementX = false;
             object.lockMovementY = false;
             object.lockRotation = false;
@@ -1066,6 +1176,7 @@ OSDAnnotations.FabricWrapper = class extends XOpatViewerSingleton {
             object.lockSkewingX = false;
             object.lockSkewingY = false;
             object.lockUniScaling = false;
+            object.hasControls = true;
         } else {
             object.lockMovementX = true;
             object.lockMovementY = true;
@@ -1076,6 +1187,7 @@ OSDAnnotations.FabricWrapper = class extends XOpatViewerSingleton {
             object.lockSkewingX = true;
             object.lockSkewingY = true;
             object.lockUniScaling = true;
+            object.hasControls = false;
         }
     }
 
@@ -1194,6 +1306,18 @@ OSDAnnotations.FabricWrapper = class extends XOpatViewerSingleton {
         const boardIndex = annotation.hasOwnProperty("_position") && !annotation.layerID ? annotation._position : undefined;
 
         this.updateSingleAnnotationVisuals(annotation);
+        this._applyAnnotationVisibilityState(annotation);
+
+        // todo needed?
+        annotation.setCoords?.();
+
+        if (Array.isArray(annotation._objects)) {
+            for (const child of annotation._objects) {
+                delete child.excludeFromExport;
+                child.setCoords?.();
+            }
+        }
+
         this._addAnnotationToLayer(annotation, layerIndex);
 
         if (!_dangerousSkipHistory && !annotation.layerID) {
@@ -2055,7 +2179,7 @@ OSDAnnotations.FabricWrapper = class extends XOpatViewerSingleton {
                 _this._abortForControlInteraction(event, true);
                 return;
             }
-
+            _this.module.cursor.mouseTime = Date.now();
             let factory = _this.module.presets.left ? _this.module.presets.left.objectFactory : undefined;
             let point = screenToPixelCoords(event.x, event.y);
             _this.module.mode.handleClickDown(event, point, true, factory);
@@ -2401,7 +2525,7 @@ OSDAnnotations.FabricWrapper = class extends XOpatViewerSingleton {
                 self.raiseEvent('layer-objects-changed', { layerId: String(layerId) });
             });
 
-            self.raiseEvent('annotation-board-refresh-request', {
+            self.raiseEvent('annotation-loaded', {
                 viewer: self.viewer,
                 clear,
                 reason: 'load-objects'

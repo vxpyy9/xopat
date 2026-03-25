@@ -158,8 +158,6 @@ OSDAnnotations.Ruler = class extends OSDAnnotations.AnnotationObjectFactory {
      * @param {fabric.Object} theObject selected fabricjs object
      */
     selected(theObject) {
-        // Re-apply controls after object selection, as FabricJS might reset them
-        this.renderAllControls(theObject);
         theObject.setControlsVisibility({ private: true });
     }
 
@@ -172,6 +170,7 @@ OSDAnnotations.Ruler = class extends OSDAnnotations.AnnotationObjectFactory {
         const line = theObject._objects[0];
         const points = [line.x1, line.y1, line.x2, line.y2];
 
+        // todo consider not copying if not necessay - see other recalculate methods
         const newObject = this.copy(theObject, {
             left: theObject.left,
             top: theObject.top,
@@ -258,6 +257,7 @@ OSDAnnotations.Ruler = class extends OSDAnnotations.AnnotationObjectFactory {
         this._current = parts;
         this._context.fabric.addHelperAnnotation(this._current[0]);
         this._context.fabric.addHelperAnnotation(this._current[1]);
+        this._current[1].bringToFront?.();
     }
 
     updateCreate(x, y) {
@@ -329,7 +329,15 @@ OSDAnnotations.Ruler = class extends OSDAnnotations.AnnotationObjectFactory {
             angle: this._getViewportCounterRotation()
         });
 
+        text.initDimensions?.();
+        text.dirty = true;
+
         this._applyTextScreenTransform(text);
+
+        text.bringToFront?.();
+        text.setCoords?.();
+
+        this._context.fabric.canvas?.requestRenderAll?.();
         return strText;
     }
 
@@ -419,7 +427,8 @@ OSDAnnotations.Ruler = class extends OSDAnnotations.AnnotationObjectFactory {
             originX: 'left',
             originY: 'top',
             centeredRotation: false,
-            angle: this._getViewportCounterRotation()
+            angle: this._getViewportCounterRotation(),
+            objectCaching: false
         });
     }
 
@@ -427,15 +436,9 @@ OSDAnnotations.Ruler = class extends OSDAnnotations.AnnotationObjectFactory {
         return -(this._context.viewer?.viewport?.getRotation(true) || 0);
     }
 
-    _getViewportRealZoom() {
-        return this._context.viewer?.viewport?.getZoom(true) || 1;
-    }
-
-    _applyTextScreenTransform(text, realZoom = this._getViewportRealZoom()) {
+    _applyTextScreenTransform(text) {
         text.set({
             angle: this._getViewportCounterRotation(),
-            scaleX: 1 / realZoom,
-            scaleY: 1 / realZoom,
             centeredRotation: false,
             originX: 'left',
             originY: 'top'

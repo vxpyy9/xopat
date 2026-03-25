@@ -793,7 +793,7 @@ export class MainLayout extends BaseComponent {
             menu.attachTo(this._dockEl);
         }
 
-        const handle = div({ id:`${this.id}-handle`, class:"w-1 hover:bg-base-300/50 cursor-col-resize" });
+        const handle = div({ id:`${this.id}-handle`, class:"w-1 hover:bg-base-300/50 hover:w-3 cursor-col-resize" });
         const dockNode = this._dockEl;
         const shell = div({ id:this.id, class:"absolute w-full h-full top-0 left-0 flex flex-row" },
             this.position === "left" ? [dockNode, handle, viewerWrap] : [viewerWrap, handle, dockNode]

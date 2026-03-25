@@ -393,6 +393,30 @@ export function initXOpat(PLUGINS: Record<string, XOpatElementItem>, MODULES: Re
         activeVisualizationConfig() {
             return CONFIG.visualizations?.[APPLICATION_CONTEXT.getOption("activeVisualizationIndex", undefined, true, true)[0]];
         },
+        /**
+         * Get the viewer currently considered active by the viewer manager.
+         */
+        activeViewer() {
+            return window.VIEWER_MANAGER?.get?.() || null;
+        },
+        /**
+         * Get index of the viewer currently considered active by the viewer manager.
+         */
+        activeViewerIndex() {
+            return window.VIEWER_MANAGER?.getActiveIndex?.() ?? -1;
+        },
+        /**
+         * Get unique ID of the viewer currently considered active by the viewer manager.
+         */
+        activeViewerId() {
+            return window.VIEWER_MANAGER?.getActiveUniqueId?.();
+        },
+        /**
+         * Check if a viewer reference resolves to the currently active viewer.
+         */
+        isActiveViewer(viewerOrUniqueId: ViewerLikeItem) {
+            return !!window.VIEWER_MANAGER?.isActive?.(viewerOrUniqueId);
+        },
         _dangerouslyAccessConfig() {
             //remove in the future?
             return CONFIG;
@@ -1147,8 +1171,8 @@ export function initXOpat(PLUGINS: Record<string, XOpatElementItem>, MODULES: Re
      * @returns {Promise<void>}
      */
     APPLICATION_CONTEXT.beginApplicationLifecycle = async function (data,
-        background: BackgroundItem[] | BackgroundConfig[] | undefined,
-        visualizations: VisualizationItem[] | undefined = undefined) {
+                                                                    background: BackgroundItem[] | BackgroundConfig[] | undefined,
+                                                                    visualizations: VisualizationItem[] | undefined = undefined) {
         try {
             initXOpatLayers();
 
@@ -1690,8 +1714,10 @@ export function initXOpat(PLUGINS: Record<string, XOpatElementItem>, MODULES: Re
             }
 
             clearTimeout(loadTooLongTimeout);
-            // todo: maybe dont do this, only if no active viewer is set
-            VM.setActive(0);
+            // Keep the manager-selected viewer unless nothing is active yet.
+            if (!VM.get() && VM.viewers.length > 0) {
+                VM.setActive(0, 'open-complete');
+            }
             // todo a bit ugly, fix later
             setTimeout(() => {
                 const vv = VM.viewers[VM.viewers.length - 1];
@@ -2128,14 +2154,14 @@ export function initXOpat(PLUGINS: Record<string, XOpatElementItem>, MODULES: Re
         }, {
             'next #left-side-buttons-menu-b-share': $.t('tutorials.basic.14')
         }, { 'next #left-side-buttons-menu-b-tutorial': $.t('tutorials.basic.15') }], function () {
-            if (withLayers()) {
-                //prerequisite - pin in default state
-                let pin = $("#shaders-pin");
-                let container = pin.parents().eq(1).children().eq(1);
-                pin.removeClass('pressed');
-                container.removeClass('force-visible');
-            }
-        });
+        if (withLayers()) {
+            //prerequisite - pin in default state
+            let pin = $("#shaders-pin");
+            let container = pin.parents().eq(1).children().eq(1);
+            pin.removeClass('pressed');
+            container.removeClass('force-visible');
+        }
+    });
 }
 
 (window as any).initXOpat = initXOpat;

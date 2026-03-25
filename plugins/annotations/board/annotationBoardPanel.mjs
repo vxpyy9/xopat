@@ -70,6 +70,7 @@ export class AnnotationBoardPanel {
         this._isSorting = false;
         this._pendingRender = false;
         this._pendingImmediateRender = false;
+        this._editUiActive = false;
 
         this.root = null;
         this.rootComponent = null;
@@ -296,6 +297,16 @@ export class AnnotationBoardPanel {
         const fabric = this.fabric;
         if (!this.layerLogsEl || !fabric) return;
 
+        const isEditing = !!(fabric.isEditing?.() || fabric.isOngoingEdit?.());
+        if (this._editUiActive !== isEditing) {
+            this._editUiActive = isEditing;
+            if (isEditing) {
+                this._disableForEdit();
+            } else {
+                this._enableAfterEdit();
+            }
+        }
+
         const previousScroll = this.bodyEl?.scrollTop ?? 0;
         this.layerLogsEl.replaceChildren();
 
@@ -486,9 +497,17 @@ export class AnnotationBoardPanel {
 
         if (factory?.isEditable?.()) {
             const editBtn = document.createElement('button');
+            const isEditingThis = !!(
+                this.context.isEditSelectionModeActive?.() &&
+                (this.fabric.isEditingObject?.(object) || this.fabric.isOngoingEditOf?.(object))
+            );
+
             editBtn.className = 'btn btn-ghost btn-xs btn-square';
-            editBtn.appendChild(faIcon('edit'));
+            editBtn.appendChild(faIcon(isEditingThis ? 'fa-floppy-disk' : 'edit'));
             editBtn.dataset.role = 'annotation-edit';
+            editBtn.dataset.mode = isEditingThis ? 'save' : 'edit';
+            if (isEditingThis) editBtn.style.color = '#d32f2f';
+
             editBtn.onclick = (e) => {
                 e.stopPropagation();
 
@@ -636,7 +655,7 @@ export class AnnotationBoardPanel {
             self.style.color = '';
         }
 
-        this.fabric.endSelectionEdit?.(cancelOnly);
+        this.context.finishSelectionEdit?.(this.viewer, cancelOnly);
         this._editSelection = undefined;
         this._enableAfterEdit();
         this.requestRender(true);
