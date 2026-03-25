@@ -97,7 +97,7 @@ ${core.requireLib("jquery")}`;
 type="button">back</button>` : "";
         case "display-error-call":
             // Escape for JS string context: backslash, backtick, and ${} interpolation
-            const jsEscape = (s) => String(s).replace(/\\/g, "\\\\").replace(/`/g, "\\`").replace(/\$\{/g, "\\${");
+            const jsEscape = (s) => String(s).replace(/\\/g, "\\\\").replace(/'/g, "\\'").replace(/`/g, "\\`").replace(/\$\{/g, "\\${");
             return `<script>DisplayError.show('${jsEscape(title)}', \`${jsEscape(description)}\`);<\/script>`;
         default:
             break;
