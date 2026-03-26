@@ -1,27 +1,504 @@
 import type {
-    AllowedScriptApiManifest, AnyFn, ApiCallMessage, ApiResponseMessage,
-    ExternalScriptApiRegistration, MethodKeys, NamespaceSchema, NamespacesState, ParsedDts, ScriptApiMetadata,
+    AllowedScriptApiManifest, AnyFn, ApiCallMessage, ApiResponseMessage, ContextAwareHostAction,
+    ExecuteScriptOptions, ExternalScriptApiRegistration, MethodKeys, NamespaceSchema, NamespacesState, ParsedDts, ScriptApiMetadata,
     ScriptApiNamespaces, ScriptApiObject, ScriptManagerStatic, ScriptNamespaceConsentEntry,
-    ViewerActionMap, WorkerInitMessage, WorkerRecord
+    ScriptingContextState, ViewerActionMap, WorkerInitMessage, WorkerRecord
 } from "./scripting/abstract-types";
 import {XOpatScriptingApi} from "./scripting/abstract-api";
 
 import { XOpatApplicationScriptApi } from "./scripting/app-api";
 import { XOpatViewerScriptApi } from "./scripting/viewer-api";
 
+
+const WORKER_RESERVED_GLOBALS = [
+    "onmessage",
+    "postMessage",
+    "close",
+    "importScripts",
+    "self",
+    "location",
+    "navigator",
+    "fetch",
+] as const;
+
+const WORKER_SCHEMA_META_KEYS = new Set([
+    "__self__",
+    "_docs",
+    "params",
+    "returnType",
+    "tsSignature",
+    "tsDeclaration",
+    "namespaceTsDeclaration",
+    "name",
+    "description",
+]);
+
+function createContextWorkerId(contextId: string, prefix = "script"): string {
+    const safeContextId = String(contextId || "default")
+        .trim()
+        .replace(/[^A-Za-z0-9_-]+/g, "_") || "default";
+
+    return `${safeContextId}-${prefix}-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+}
+
+function generateWorkerBoilerplate<TNamespaces extends ScriptApiNamespaces>(
+    namespaces: NamespacesState<TNamespaces>,
+    apiTimeout: number
+): string {
+    let workerCode = "";
+
+    for (const namespace in namespaces) {
+        const methods = namespaces[namespace];
+        if (!methods) continue;
+
+        if (WORKER_RESERVED_GLOBALS.includes(namespace as typeof WORKER_RESERVED_GLOBALS[number])) {
+            console.error(`[Security] Cannot expose namespace '${namespace}' because it conflicts with a reserved Worker global.`);
+            continue;
+        }
+
+        if (!namespace.match(/[a-zA-Z0-9][a-zA-Z0-9_]*/)) {
+            console.error(`[Syntax] Cannot use namespace '${namespace}' - it must be a valid javascript variable name token.`);
+            continue;
+        }
+
+        workerCode += `const _ns_${namespace} = {};\n`;
+        const runtimeMethods = methods as Record<string, unknown>;
+        const isNamespaceAllowed = !!runtimeMethods["__self__"];
+
+        for (const method in runtimeMethods) {
+            if (WORKER_SCHEMA_META_KEYS.has(method)) continue;
+
+            if (runtimeMethods[method] || isNamespaceAllowed) {
+                workerCode += `
+                    _ns_${namespace}.${method} = (...params) => {
+                        return new Promise((resolve, reject) => {
+                            const callId = Math.random().toString(36).substring(2);
+
+                            const timeoutId = setTimeout(() => {
+                                if (_pendingCalls.has(callId)) {
+                                    _pendingCalls.delete(callId);
+                                    reject(new Error("API Timeout: ${namespace}.${method} took longer than " + API_TIMEOUT + "ms"));
+                                }
+                            }, API_TIMEOUT);
+
+                            _pendingCalls.set(callId, { resolve, reject, timeoutId });
+
+                            _securePort.postMessage({
+                                type: 'api-call',
+                                callId: callId,
+                                namespace: '${namespace}',
+                                method: '${method}',
+                                params: params
+                            });
+                        });
+                    };`;
+            }
+        }
+
+        workerCode += `
+            Object.freeze(_ns_${namespace});
+            Object.defineProperty(self, '${namespace}', {
+                value: _ns_${namespace},
+                writable: false,
+                configurable: false
+            });\n`;
+    }
+
+    return workerCode;
+}
+
+function buildWorkerSource(script: string, boilerplate: string, apiTimeout: number): string {
+    return `
+(function() {
+let _securePort = null;
+const _pendingCalls = new Map();
+const API_TIMEOUT = ${apiTimeout};
+let _finished = false;
+
+const finishWithResult = (result) => {
+    if (_finished) return;
+    _finished = true;
+    try {
+        self.postMessage({ result });
+    } catch (_) {}
+};
+
+const finishWithError = (err) => {
+    if (_finished) return;
+    _finished = true;
+    const message = err instanceof Error ? err.message : String(err);
+    try {
+        self.postMessage({ error: message });
+    } catch (_) {}
+};
+
+const initHandler = (e) => {
+    if (e.data.type === "init") {
+        self.removeEventListener("message", initHandler);
+        _securePort = e.ports[0];
+
+        _securePort.onmessage = (msg) => {
+            const { type, callId, result, error } = msg.data;
+            if (type === "api-response" && _pendingCalls.has(callId)) {
+                const pending = _pendingCalls.get(callId);
+                const { resolve, reject, timeoutId } = pending;
+                clearTimeout(timeoutId);
+                _pendingCalls.delete(callId);
+
+                if (error) reject(new Error(error));
+                else resolve(result);
+            }
+        };
+
+        ${boilerplate}
+
+        Object.defineProperty(self, "onmessage", {
+            value: null,
+            writable: false,
+            configurable: false
+        });
+
+        // Run the user script inside an async scope so top-level await works. 'eval' not in strict mode
+        (async () => {
+            "use strict";
+
+            // Shadow common escape hatches / side-effectful globals inside the script scope.
+            const self = undefined;
+            const globalThis = undefined;
+            const postMessage = undefined;
+            const importScripts = undefined;
+            const fetch = undefined;
+            const XMLHttpRequest = undefined;
+            const WebSocket = undefined;
+            const EventSource = undefined;
+            const Worker = undefined;
+            const SharedWorker = undefined;
+            const navigator = undefined;
+            const caches = undefined;
+            const indexedDB = undefined;
+            const Function = undefined;
+
+            ${script}
+        })().then(finishWithResult).catch(finishWithError);
+    }
+};
+
+self.addEventListener("unhandledrejection", (event) => {
+    event.preventDefault?.();
+    finishWithError(event.reason);
+});
+
+self.addEventListener("error", (event) => {
+    event.preventDefault?.();
+    finishWithError(event.error || event.message || "Worker execution failed.");
+});
+
+self.addEventListener("message", initHandler);
+})();`;
+}
+
+async function dispatchWorkerApiCall<TNamespaces extends ScriptApiNamespaces>(
+    manager: ScriptingManager<TNamespaces>,
+    context: ScriptingContext<TNamespaces>,
+    workerId: string,
+    data: ApiCallMessage,
+    port: MessagePort
+): Promise<void> {
+    const { namespace, method, params, callId } = data;
+    const nsConfig = manager.namespaces[namespace];
+    context.touchWorker(workerId);
+
+    const workerTimeoutId = setTimeout(() => {
+        console.warn(`Worker ${workerId} exceeded global timeout in context ${context.id}.`);
+        port.postMessage({
+            type: "api-response",
+            callId,
+            error: `API Timeout: ${namespace}.${method} exceeded global timeout.`,
+        } satisfies ApiResponseMessage);
+        context.terminateWorker(workerId);
+    }, manager.apiTimeout);
+
+    if (nsConfig && ((nsConfig as Record<string, unknown>)[method] || nsConfig["__self__"])) {
+        const action = manager.viewerActions[`${namespace}:${method}`] || manager.viewerActions[method];
+        if (typeof action === "function") {
+            try {
+                const hostAction = action as ContextAwareHostAction;
+                const result = hostAction.__scriptingContextAware
+                    ? await hostAction(context, ...params)
+                    : await hostAction(...params);
+                clearTimeout(workerTimeoutId);
+                port.postMessage({ type: "api-response", callId, result } satisfies ApiResponseMessage);
+            } catch (err) {
+                clearTimeout(workerTimeoutId);
+                port.postMessage({
+                    type: "api-response",
+                    callId,
+                    error: err instanceof Error ? err.toString() : String(err),
+                } satisfies ApiResponseMessage);
+            }
+        } else {
+            clearTimeout(workerTimeoutId);
+            port.postMessage({
+                type: "api-response",
+                callId,
+                error: `Method ${method} is not implemented on the host.`,
+            } satisfies ApiResponseMessage);
+        }
+    } else {
+        clearTimeout(workerTimeoutId);
+        console.warn(`[Security] Blocked call: ${namespace}.${method}`);
+        port.postMessage({
+            type: "api-response",
+            callId,
+            error: `Unauthorized API call: ${namespace}.${method}`,
+        } satisfies ApiResponseMessage);
+    }
+}
+
+export class ScriptingContext<
+    TNamespaces extends ScriptApiNamespaces = ScriptApiNamespaces
+> {
+    protected manager: ScriptingManager<TNamespaces>;
+    protected _id: string;
+    protected _label?: string;
+    protected _metadata?: Record<string, unknown>;
+    protected _workers: Record<string, WorkerRecord>;
+    protected _createdAt: number;
+    protected _lastUsedAt: number;
+    protected _activeViewerContextId: string | null;
+
+    constructor(
+        manager: ScriptingManager<TNamespaces>,
+        id: string,
+        options: {
+            label?: string;
+            metadata?: Record<string, unknown>;
+            activeViewerContextId?: string | null;
+        } = {}
+    ) {
+        this.manager = manager;
+        this._id = id;
+        this._label = options.label;
+        this._metadata = options.metadata ? { ...options.metadata } : undefined;
+        this._workers = {};
+        this._createdAt = Date.now();
+        this._lastUsedAt = this._createdAt;
+        this._activeViewerContextId = options.activeViewerContextId ?? null;
+    }
+
+    get id(): string {
+        return this._id;
+    }
+
+    get label(): string | undefined {
+        return this._label;
+    }
+
+    setLabel(label?: string): this {
+        this._label = label;
+        this.touch();
+        return this;
+    }
+
+    get metadata(): Record<string, unknown> | undefined {
+        return this._metadata ? { ...this._metadata } : undefined;
+    }
+
+    setMetadata(metadata?: Record<string, unknown>): this {
+        this._metadata = metadata ? { ...metadata } : undefined;
+        this.touch();
+        return this;
+    }
+
+    patchMetadata(metadata: Record<string, unknown>): this {
+        this._metadata = { ...(this._metadata || {}), ...metadata };
+        this.touch();
+        return this;
+    }
+
+    touch(): this {
+        this._lastUsedAt = Date.now();
+        return this;
+    }
+
+    registerWorker(workerId: string, record: WorkerRecord): this {
+        this._workers[workerId] = record;
+        return this.touch();
+    }
+
+    unregisterWorker(workerId: string): this {
+        delete this._workers[workerId];
+        return this.touch();
+    }
+
+    hasWorker(workerId: string): boolean {
+        return !!this._workers[workerId];
+    }
+
+    getWorkerRecord(workerId: string): WorkerRecord | null {
+        return this._workers[workerId] || null;
+    }
+
+    listWorkerIds(): string[] {
+        return Object.keys(this._workers);
+    }
+
+    touchWorker(workerId: string): void {
+        const record = this._workers[workerId];
+        if (!record) return;
+
+        record.lastUsedAt = Date.now();
+        this.touch();
+    }
+
+    createWorkerId(prefix = "script"): string {
+        return createContextWorkerId(this._id, prefix);
+    }
+
+    setActiveViewerContextId(contextId: string | null | undefined): this {
+        this._activeViewerContextId = contextId || null;
+        return this.touch();
+    }
+
+    getActiveViewerContextId(): string | null {
+        return this._activeViewerContextId;
+    }
+
+    getState(): ScriptingContextState {
+        return {
+            id: this._id,
+            label: this._label,
+            metadata: this._metadata ? { ...this._metadata } : undefined,
+            activeViewerContextId: this._activeViewerContextId,
+            workerIds: this.listWorkerIds(),
+            createdAt: this._createdAt,
+            lastUsedAt: this._lastUsedAt,
+        };
+    }
+
+    executeScript(script: string, options: ExecuteScriptOptions = {}): Promise<unknown> {
+        const workerId = options.workerId || this.createWorkerId("script");
+
+        return new Promise((resolve, reject) => {
+            let worker: Worker | null;
+
+            try {
+                worker = this.createWorker(script, { ...options, workerId });
+            } catch (error) {
+                reject(error instanceof Error ? error : new Error(String(error)));
+                return;
+            }
+
+            if (!worker) {
+                reject(new Error("Unable to create script worker."));
+                return;
+            }
+
+            const timeoutId = setTimeout(() => {
+                this.terminateWorker(workerId);
+                reject(new Error("Script execution timed out."));
+            }, this.manager.apiTimeout);
+
+            worker.onmessage = (event: MessageEvent<{ result?: unknown; error?: string }>) => {
+                clearTimeout(timeoutId);
+                const { result, error } = event.data || {};
+                this.terminateWorker(workerId);
+
+                if (error) reject(new Error(error));
+                else resolve(result);
+            };
+
+            worker.onerror = (event: ErrorEvent) => {
+                clearTimeout(timeoutId);
+                this.terminateWorker(workerId);
+                reject(new Error(event.message || "Script worker failed."));
+            };
+        });
+    }
+
+    createWorker(script: string, options: ExecuteScriptOptions = {}): Worker | null {
+        const workerId = options.workerId || this.createWorkerId("script");
+
+        if (script.trim().startsWith("http") || script.endsWith(".js") || script.endsWith(".mjs")) {
+            console.warn("Creating a worker from a URL is not supported now due to origin security reasons. Use serialized text.");
+            return null;
+        }
+
+        if (this.hasWorker(workerId)) {
+            this.terminateWorker(workerId);
+        }
+
+        const channel = new MessageChannel();
+        const workerBlobCode = buildWorkerSource(
+            script,
+            generateWorkerBoilerplate(this.manager.namespaces, this.manager.apiTimeout),
+            this.manager.apiTimeout
+        );
+        const blob = new Blob([workerBlobCode], { type: "application/javascript" });
+        const workerUrl = URL.createObjectURL(blob);
+        const worker = new Worker(workerUrl);
+
+        channel.port1.onmessage = (event: MessageEvent<ApiCallMessage>) => {
+            void dispatchWorkerApiCall(this.manager, this, workerId, event.data, channel.port1);
+        };
+
+        this.registerWorker(workerId, {
+            worker,
+            channel,
+            contextId: this._id,
+            createdAt: Date.now(),
+            lastUsedAt: Date.now(),
+            reusable: !!options.reuseWorker,
+        });
+
+        worker.postMessage({ type: "init" } satisfies WorkerInitMessage, [channel.port2]);
+        URL.revokeObjectURL(workerUrl);
+
+        return worker;
+    }
+
+    abortScript(workerId?: string): void {
+        if (workerId) {
+            this.terminateWorker(workerId, "aborted");
+            return;
+        }
+
+        for (const id of this.listWorkerIds()) {
+            this.terminateWorker(id, "aborted");
+        }
+    }
+
+    terminateWorker(workerId: string, reason: "terminated" | "aborted" = "terminated"): void {
+        const record = this._workers[workerId];
+        if (!record) return;
+
+        record.worker.terminate();
+        record.channel.port1.close();
+        this.unregisterWorker(workerId);
+        console.log(`Worker ${workerId} ${reason} in context ${this._id}.`);
+    }
+
+    destroy(): void {
+        this.manager.destroyContext(this._id);
+    }
+}
+
 export class ScriptingManager<
+
     TNamespaces extends ScriptApiNamespaces = ScriptApiNamespaces
 > {
     static __self: ScriptingManager<any> | undefined = undefined;
     static __externalApiRegistrations?: Array<ExternalScriptApiRegistration<any>> = [];
 
     static XOpatScriptingApi: typeof XOpatScriptingApi;
+    static ScriptingContext: typeof ScriptingContext;
 
-    workers: Record<string, WorkerRecord>;
+    contexts: Record<string, ScriptingContext<TNamespaces>>;
+    defaultContextId: string;
     viewerActions: ViewerActionMap<TNamespaces>;
     apiTimeout: number;
     namespaces: NamespacesState<TNamespaces>;
-    protected ready: Promise<void> | undefined;
+    ready: Promise<void> | undefined;
     protected _bootstrapClosed: boolean;
     protected _initializing: boolean;
     protected _processedExternalRegistrations: Set<ExternalScriptApiRegistration<TNamespaces>>;
@@ -60,7 +537,8 @@ export class ScriptingManager<
         }
         staticContext.__self = this;
 
-        this.workers = {};
+        this.contexts = {};
+        this.defaultContextId = "default";
         this.viewerActions = viewerActions;
         this.apiTimeout = apiTimeout;
         this.namespaces = {} as NamespacesState<TNamespaces>;
@@ -68,7 +546,71 @@ export class ScriptingManager<
         this._initializing = false;
         this._processedExternalRegistrations = new Set();
         this.ready = undefined;
+        this.createContext({ id: this.defaultContextId, label: "Default" });
     }
+
+    protected normalizeContextId(contextId?: string | null): string {
+        const normalized = String(contextId || this.defaultContextId).trim();
+        return normalized || this.defaultContextId;
+    }
+
+
+    createContext(options: {
+        id?: string;
+        label?: string;
+        metadata?: Record<string, unknown>;
+        activeViewerContextId?: string | null;
+    } = {}): ScriptingContext<TNamespaces> {
+        const contextId = this.normalizeContextId(options.id);
+        const existing = this.contexts[contextId];
+        if (existing) {
+            if (options.label !== undefined) existing.setLabel(options.label);
+            if (options.metadata !== undefined) existing.setMetadata(options.metadata);
+            if (options.activeViewerContextId !== undefined) {
+                existing.setActiveViewerContextId(options.activeViewerContextId);
+            }
+            return existing;
+        }
+
+        const context = new ScriptingContext<TNamespaces>(this, contextId, {
+            label: options.label,
+            metadata: options.metadata,
+            activeViewerContextId: options.activeViewerContextId,
+        });
+        this.contexts[contextId] = context;
+        return context;
+    }
+
+    getContext(contextId: string = this.defaultContextId): ScriptingContext<TNamespaces> {
+        return this.contexts[this.normalizeContextId(contextId)] || this.createContext({ id: contextId });
+    }
+
+    hasContext(contextId: string): boolean {
+        return !!this.contexts[this.normalizeContextId(contextId)];
+    }
+
+    listContexts(): ScriptingContext<TNamespaces>[] {
+        return Object.values(this.contexts);
+    }
+
+    listContextStates(): ScriptingContextState[] {
+        return this.listContexts().map(context => context.getState());
+    }
+
+
+    destroyContext(contextId: string): void {
+        const normalized = this.normalizeContextId(contextId);
+        const context = this.contexts[normalized];
+        if (!context) return;
+
+        context.abortScript();
+        delete this.contexts[normalized];
+
+        if (normalized === this.defaultContextId) {
+            this.createContext({ id: this.defaultContextId, label: "Default" });
+        }
+    }
+
 
     async initialize(): Promise<void> {
         if (this.ready) return this.ready;
@@ -106,7 +648,7 @@ export class ScriptingManager<
             await this.initialize();
         }
 
-        const workerCount = Object.keys(this.workers).length;
+        const workerCount = this.listContexts().reduce((count, context) => count + context.listWorkerIds().length, 0);
         const lateNote = workerCount > 0
             ? ` ${workerCount} worker(s) already exist, so they will not see the new namespace.`
             : "";
@@ -164,7 +706,14 @@ export class ScriptingManager<
             methodNames.forEach(name => {
                 schema[name] = true;
 
-                const boundFn = (apiInstance as any)[name].bind(apiInstance);
+                const boundFn = Object.assign(
+                    (context: ScriptingContext<TNamespaces>, ...params: unknown[]) => {
+                        const contextualApi = apiInstance.bindInvocationContext({ scriptingContext: context });
+                        return (contextualApi as any)[name](...params);
+                    },
+                    { __scriptingContextAware: true }
+                ) as ContextAwareHostAction;
+
                 this.viewerActions[`${ns}:${name}`] = boundFn;
                 this.viewerActions[name] ??= boundFn;
 
@@ -844,7 +1393,8 @@ export class ScriptingManager<
     registerNamespace<K extends string, TImpl extends ScriptApiObject>(
         namespace: K,
         schema: Partial<Record<MethodKeys<TImpl>, boolean>>,
-        implementations: TImpl
+        implementations: TImpl,
+        options: { contextAware?: boolean } = {}
     ): void {
         this.namespaces[namespace] = {
             __self__: false,
@@ -852,7 +1402,15 @@ export class ScriptingManager<
         };
 
         for (const [methodName, func] of Object.entries(implementations) as Array<[keyof TImpl & string, TImpl[keyof TImpl & string]]>) {
-            this.viewerActions[`${namespace}:${methodName}`] = func as AnyFn;
+            const hostAction = options.contextAware
+                ? Object.assign(
+                    (context: ScriptingContext<TNamespaces>, ...params: unknown[]) =>
+                        (func as AnyFn).call(implementations, context, ...params),
+                    { __scriptingContextAware: true }
+                ) as ContextAwareHostAction
+                : func as ContextAwareHostAction;
+
+            this.viewerActions[`${namespace}:${methodName}`] = hostAction;
         }
     }
 
@@ -972,280 +1530,6 @@ export class ScriptingManager<
         }
     }
 
-    createWorker(script: string, workerId: string): Worker | null {
-        const channel = new MessageChannel();
-
-        if (script.trim().startsWith("http") || script.endsWith(".js") || script.endsWith(".mjs")) {
-            console.warn("Creating a worker from a URL is not supported now due to origin security reasons. Use serialized text.");
-            return null;
-        }
-
-        const workerBlobCode = `
-(function() {
-let _securePort = null;
-const _pendingCalls = new Map();
-const API_TIMEOUT = ${this.apiTimeout};
-let _finished = false;
-
-const finishWithResult = (result) => {
-    if (_finished) return;
-    _finished = true;
-    try {
-        self.postMessage({ result });
-    } catch (_) {}
-};
-
-const finishWithError = (err) => {
-    if (_finished) return;
-    _finished = true;
-    const message = err instanceof Error ? err.message : String(err);
-    try {
-        self.postMessage({ error: message });
-    } catch (_) {}
-};
-
-const initHandler = (e) => {
-    if (e.data.type === "init") {
-        self.removeEventListener("message", initHandler);
-        _securePort = e.ports[0];
-
-        _securePort.onmessage = (msg) => {
-            const { type, callId, result, error } = msg.data;
-            if (type === "api-response" && _pendingCalls.has(callId)) {
-                const pending = _pendingCalls.get(callId);
-                const { resolve, reject, timeoutId } = pending;
-                clearTimeout(timeoutId);
-                _pendingCalls.delete(callId);
-
-                if (error) reject(new Error(error));
-                else resolve(result);
-            }
-        };
-
-        ${this.generateWorkerBoilerplate()}
-
-        Object.defineProperty(self, "onmessage", {
-            value: null,
-            writable: false,
-            configurable: false
-        });
-
-        // Run the user script inside an async scope so top-level await works. 'eval' not in strict mode
-        (async () => {
-            "use strict";
-
-            // Shadow common escape hatches / side-effectful globals inside the script scope.
-            const self = undefined;
-            const globalThis = undefined;
-            const postMessage = undefined;
-            const importScripts = undefined;
-            const fetch = undefined;
-            const XMLHttpRequest = undefined;
-            const WebSocket = undefined;
-            const EventSource = undefined;
-            const Worker = undefined;
-            const SharedWorker = undefined;
-            const navigator = undefined;
-            const caches = undefined;
-            const indexedDB = undefined;
-            const Function = undefined;
-
-            ${script}
-        })().then(finishWithResult).catch(finishWithError);
-    }
-};
-
-self.addEventListener("unhandledrejection", (event) => {
-    event.preventDefault?.();
-    finishWithError(event.reason);
-});
-
-self.addEventListener("error", (event) => {
-    event.preventDefault?.();
-    finishWithError(event.error || event.message || "Worker execution failed.");
-});
-
-self.addEventListener("message", initHandler);
-})();`;
-
-        const blob = new Blob([workerBlobCode], { type: "application/javascript" });
-        const worker = new Worker(URL.createObjectURL(blob));
-
-        channel.port1.onmessage = (event: MessageEvent<ApiCallMessage>) => {
-            this.handleApiCall(workerId, event.data, channel.port1);
-        };
-
-        this.workers[workerId] = { worker, channel };
-        worker.postMessage({ type: "init" } satisfies WorkerInitMessage, [channel.port2]);
-
-        return worker;
-    }
-
-    executeScript(script: string, workerId: string = `chat-script-${Date.now()}-${Math.random().toString(36).slice(2)}`): Promise<unknown> {
-        return new Promise((resolve, reject) => {
-            const worker = this.createWorker(script, workerId);
-
-            if (!worker) {
-                reject(new Error("Unable to create script worker."));
-                return;
-            }
-
-            const timeoutId = setTimeout(() => {
-                this.terminateWorker(workerId);
-                reject(new Error("Script execution timed out."));
-            }, this.apiTimeout);
-
-            worker.onmessage = (event: MessageEvent<{ result?: unknown; error?: string }>) => {
-                clearTimeout(timeoutId);
-                const { result, error } = event.data || {};
-                this.terminateWorker(workerId);
-
-                if (error) reject(new Error(error));
-                else resolve(result);
-            };
-
-            worker.onerror = (event: ErrorEvent) => {
-                clearTimeout(timeoutId);
-                this.terminateWorker(workerId);
-                reject(new Error(event.message || "Script worker failed."));
-            };
-        });
-    }
-
-    abortScript(workerId: string): void {
-        if (this.workers[workerId]) {
-            this.workers[workerId].worker.terminate();
-            delete this.workers[workerId];
-            console.log(`Worker ${workerId} aborted.`);
-        }
-    }
-
-    generateWorkerBoilerplate(): string {
-        let workerCode = "";
-
-        const reservedGlobals = ["onmessage", "postMessage", "close", "importScripts", "self", "location", "navigator", "fetch"];
-
-        for (const ns in this.namespaces) {
-            if (reservedGlobals.includes(ns)) {
-                console.error(`[Security] Cannot expose namespace '${ns}' because it conflicts with a reserved Worker global.`);
-                continue;
-            }
-
-            if (!ns.match(/[a-zA-Z0-9][a-zA-Z0-9_]*/)) {
-                console.error(`[Syntax] Cannot use namespace '${ns}' - it must be a valid javascript variable name token.`);
-                continue;
-            }
-
-            workerCode += `const _ns_${ns} = {};\n`;
-            const methods = this.namespaces[ns];
-            const isNamespaceAllowed = methods?.["__self__"];
-
-            for (const method in methods) {
-                if (
-                    method === "__self__" ||
-                    method === "_docs" ||
-                    method === "params" ||
-                    method === "returnType" ||
-                    method === "tsSignature" ||
-                    method === "tsDeclaration" ||
-                    method === "namespaceTsDeclaration"
-                ) continue;
-
-                if (methods[method] || isNamespaceAllowed) {
-                    workerCode += `
-                        _ns_${ns}.${method} = (...params) => {
-                            return new Promise((resolve, reject) => {
-                                const callId = Math.random().toString(36).substring(2);
-
-                                const timeoutId = setTimeout(() => {
-                                    if (_pendingCalls.has(callId)) {
-                                        _pendingCalls.delete(callId);
-                                        reject(new Error("API Timeout: ${ns}.${method} took longer than " + API_TIMEOUT + "ms"));
-                                    }
-                                }, API_TIMEOUT);
-
-                                _pendingCalls.set(callId, { resolve, reject, timeoutId });
-
-                                _securePort.postMessage({
-                                    type: 'api-call',
-                                    callId: callId,
-                                    namespace: '${ns}',
-                                    method: '${method}',
-                                    params: params
-                                });
-                            });
-                        };`;
-                }
-            }
-
-            workerCode += `
-                Object.freeze(_ns_${ns});
-                Object.defineProperty(self, '${ns}', {
-                    value: _ns_${ns},
-                    writable: false,
-                    configurable: false
-                });\n`;
-        }
-
-        return workerCode;
-    }
-
-    async handleApiCall(workerId: string, data: ApiCallMessage, port: MessagePort): Promise<void> {
-        const { namespace, method, params, callId } = data;
-        const nsConfig = this.namespaces[namespace];
-
-        const workerTimeoutId = setTimeout(() => {
-            console.warn(`Worker ${workerId} exceeded global timeout.`);
-            port.postMessage({
-                type: "api-response",
-                callId,
-                error: `API Timeout: ${namespace}.${method} exceeded global timeout.`,
-            } satisfies ApiResponseMessage);
-            this.terminateWorker(workerId);
-        }, this.apiTimeout);
-
-        if (nsConfig && (nsConfig[method] || nsConfig["__self__"])) {
-            const action = this.viewerActions[`${namespace}:${method}`] || this.viewerActions[method];
-            if (typeof action === "function") {
-                try {
-                    const result = await action(...params);
-                    clearTimeout(workerTimeoutId);
-                    port.postMessage({ type: "api-response", callId, result } satisfies ApiResponseMessage);
-                } catch (err) {
-                    clearTimeout(workerTimeoutId);
-                    port.postMessage({
-                        type: "api-response",
-                        callId,
-                        error: err instanceof Error ? err.toString() : String(err),
-                    } satisfies ApiResponseMessage);
-                }
-            } else {
-                clearTimeout(workerTimeoutId);
-                port.postMessage({
-                    type: "api-response",
-                    callId,
-                    error: `Method ${method} is not implemented on the host.`,
-                } satisfies ApiResponseMessage);
-            }
-        } else {
-            clearTimeout(workerTimeoutId);
-            console.warn(`[Security] Blocked call: ${namespace}.${method}`);
-            port.postMessage({
-                type: "api-response",
-                callId,
-                error: `Unauthorized API call: ${namespace}.${method}`,
-            } satisfies ApiResponseMessage);
-        }
-    }
-
-    terminateWorker(workerId: string): void {
-        if (this.workers[workerId]) {
-            this.workers[workerId].worker.terminate();
-            delete this.workers[workerId];
-            console.log(`Worker ${workerId} terminated.`);
-        }
-    }
-
     setConsent(namespace: string, method: string, value: boolean): void {
         if (!this.namespaces[namespace]) this.namespaces[namespace] = { __self__: false };
         this.namespaces[namespace][method] = value;
@@ -1258,4 +1542,5 @@ self.addEventListener("message", initHandler);
 }
 
 ScriptingManager.XOpatScriptingApi = XOpatScriptingApi;
+ScriptingManager.ScriptingContext = ScriptingContext;
 (window as any).ScriptingManager = ScriptingManager;

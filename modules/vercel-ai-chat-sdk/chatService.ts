@@ -144,6 +144,27 @@ export class ChatService {
         return this._providers.get(providerId);
     }
 
+    getProviderContextId(providerId?: string | null): string | null {
+        if (!providerId) return null;
+        const raw = this.getProvider(providerId)?.contextId;
+        const contextId = typeof raw === 'string' ? raw.trim() : '';
+        return contextId || null;
+    }
+
+    getSessionProviderId(sessionId?: string | null): string | null {
+        const resolvedSessionId = sessionId || this._activeSessionId;
+        if (!resolvedSessionId) return null;
+        return this._sessionState.get(resolvedSessionId)?.providerId || null;
+    }
+
+    getSessionContextId(sessionId?: string | null): string | null {
+        return this.getProviderContextId(this.getSessionProviderId(sessionId));
+    }
+
+    getActiveContextId(): string | null {
+        return this.getSessionContextId(this._activeSessionId);
+    }
+
     async deleteProvider(providerId: string): Promise<void> {
         await this._server().deleteProvider!({ providerId });
         this._providers.delete(providerId);

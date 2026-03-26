@@ -64,12 +64,12 @@ export type ViewerScreenshotOptions = {
 
 export interface ViewerScriptApi extends ScriptApiObject {
     /**
-     * Retrieves the current zoom level, x/y coordinates, and active image plane.
+     * Retrieves the current zoom level, x/y coordinates, and active image plane for this script context's viewer.
      */
     getViewport(): ViewerViewportInfo;
 
     /**
-     * Pans and zooms the viewer to a specific location or depth.
+     * Pans and zooms this script context's viewer to a specific location or depth.
      */
     focusOn(
         x: number,
@@ -86,7 +86,7 @@ export interface ViewerScriptApi extends ScriptApiObject {
     getTiledImages(): ViewerTiledImageInfo[];
 
     /**
-     * These methods convert between coord systems in OpenSeadragon.
+     * These methods convert between coord systems in OpenSeadragon for the viewer bound to this script context.
      * Window: the screen coordinates of the monitor, usually hundreds to thousands.
      * Viewport: the unit coordinates of the viewport, internal use.
      * Image: the pixel coords of the target tiled image, usually thousands to millions.

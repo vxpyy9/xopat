@@ -132,10 +132,43 @@ class ChatModule extends XOpatModuleSingleton {
         return manager.getAllowedApiManifest() || { namespaces: [] };
     }
 
-    async executeAssistantScript(script: string): Promise<ChatMessage> {
-        const manager = APPLICATION_CONTEXT.Scripting;
+    getActiveChatContextId(): string | null {
+        const activeSessionContextId = this.chatService?.getActiveContextId?.();
+        if (activeSessionContextId) return activeSessionContextId;
 
-        if (!manager.executeScript) {
+        const providerId = this.chatPanel?._providerId || null;
+        return this.chatService?.getProviderContextId?.(providerId) || null;
+    }
+
+    _getScriptExecutionContext(): any | null {
+        const manager = APPLICATION_CONTEXT?.Scripting;
+        if (!manager || typeof manager.getContext !== 'function') {
+            return null;
+        }
+
+        const viewerContextId = this.getActiveChatContextId();
+        const contextId = viewerContextId || manager.defaultContextId || 'default';
+        const context = manager.getContext(contextId);
+
+        if (viewerContextId && typeof context?.setActiveViewerContextId === 'function') {
+            context.setActiveViewerContextId(viewerContextId);
+        }
+
+        context?.setLabel?.(`Chat: ${contextId}`);
+        context?.patchMetadata?.({
+            source: 'chat',
+            providerId: this.chatPanel?._providerId || null,
+            sessionId: this.chatService?.getActiveSessionId?.() || null,
+            viewerContextId,
+        });
+
+        return context;
+    }
+
+    async executeAssistantScript(script: string, options: { signal?: AbortSignal } = {}): Promise<ChatMessage> {
+        const context = this._getScriptExecutionContext();
+
+        if (!context || typeof context.executeScript !== 'function') {
             return {
                 role: 'tool',
                 parts: [{ ok: false, type: 'script-result', text: 'The requested action could not be completed because scripting is not available.' }],
@@ -144,8 +177,43 @@ class ChatModule extends XOpatModuleSingleton {
             };
         }
 
+        const workerId = typeof context?.createWorker === 'function'
+            ? `${context.id || 'default'}-chat-script-${Date.now()}-${Math.random().toString(36).slice(2)}`
+            : undefined;
+
+        const signal = options?.signal;
+        const abortError = () => {
+            try {
+                if (workerId && typeof context?.abortScript === 'function') {
+                    context.abortScript(workerId);
+                }
+            } catch (_) {
+                // ignore abort cleanup failures
+            }
+            return new DOMException('Stopped by user.', 'AbortError');
+        };
+
         try {
-            const result = await manager.executeScript(script);
+            if (signal?.aborted) {
+                throw abortError();
+            }
+
+            const executionPromise = context.executeScript(
+                script,
+                workerId ? { workerId } : {}
+            );
+
+            const result = signal
+                ? await new Promise((resolve, reject) => {
+                    const onAbort = () => reject(abortError());
+                    signal.addEventListener('abort', onAbort, { once: true });
+
+                    executionPromise.then(resolve, reject).finally(() => {
+                        signal.removeEventListener('abort', onAbort);
+                    });
+                })
+                : await executionPromise;
+
             return await this._normalizeScriptResultToMessage(result);
         } catch (error) {
             const message = error instanceof Error ? error.message : String(error);

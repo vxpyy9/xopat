@@ -53,17 +53,17 @@ export type AnnotationFactoryRecord = {
 
 export interface AnnotationsScriptApi extends ScriptApiObject {
     /**
-     * Returns the number of full annotations in the active viewer.
+     * Returns the number of full annotations in the viewer bound to the current script context.
      */
     getAnnotationCount(): number;
 
     /**
-     * Returns annotation records for the active viewer.
+     * Returns annotation records for the viewer bound to the current script context.
      */
     getAnnotations(): AnnotationRecord[];
 
     /**
-     * Returns annotation records that are currently selected.
+     * Returns annotation records that are currently selected in the viewer bound to the current script context.
      */
     getSelectedAnnotations(): AnnotationRecord[];
 
@@ -73,7 +73,7 @@ export interface AnnotationsScriptApi extends ScriptApiObject {
     getAnnotation(ref: AnnotationRef): AnnotationRecord | null;
 
     /**
-     * Returns comments from all annotations in the active viewer.
+     * Returns comments from all annotations in the viewer bound to the current script context.
      */
     listComments(includeRemoved?: boolean): AnnotationCommentRecord[];
 
@@ -98,7 +98,7 @@ export interface AnnotationsScriptApi extends ScriptApiObject {
     getPreset(id: string): AnnotationPresetRecord | null;
 
     /**
-     * Returns the currently active left or right preset.
+     * Returns the currently selected left or right preset for this script context.
      */
     getActivePreset(isLeftClick?: boolean): AnnotationPresetRecord | null;
 
@@ -119,7 +119,7 @@ export type AnnotationCommentInput = {
 export type AnnotationCreateInput = {
     /**
      * Factory to create, such as "rect", "polygon", "point", "line", "polyline", "ruler", ...
-     * If omitted, the active or referenced preset factory is used.
+     * If omitted, the factory from the explicitly passed preset or from the preset selected in this script context is used.
      */
     factoryID?: string;
 
@@ -130,7 +130,7 @@ export type AnnotationCreateInput = {
 
     /**
      * Preset to bind to the newly created annotation.
-     * If omitted, the active preset is used.
+     * If omitted, the preset selected in the current script context is used, falling back to the first existing preset.
      */
     presetID?: string;
 
@@ -145,7 +145,7 @@ export type AnnotationCreateInput = {
     parameters: unknown;
 
     /**
-     * Whether preset fallback should use the left or right active preset.
+     * Whether preset fallback should use the left or right preset selected in this script context.
      * Default true.
      */
     isLeftClick?: boolean;
@@ -263,12 +263,12 @@ export interface AnnotationsWriteScriptApi extends ScriptApiObject {
     deletePreset(id: string): boolean;
 
     /**
-     * Selects a preset as the left or right active preset.
+     * Selects a preset as the left or right active preset for this script context.
      */
     selectPreset(id: string, isLeftClick?: boolean): AnnotationPresetRecord | null;
 
     /**
-     * Clears the left or right active preset.
+     * Clears the left or right active preset for this script context.
      */
     clearSelectedPreset(isLeftClick?: boolean): null;
 

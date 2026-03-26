@@ -1127,10 +1127,14 @@ export class ChatPanel extends BaseComponent {
     }
 
     async _captureViewerScreenshotBlob(): Promise<Blob> {
-        const viewer = (globalThis as any).VIEWER_MANAGER?.activeViewer || (globalThis as any).VIEWER;
+        const viewerContextId = this.chat?.getActiveChatContextId?.() || null;
+        const viewers = (globalThis as any).VIEWER_MANAGER?.viewers || [];
+        const viewer = (viewerContextId
+            ? viewers.find((candidate: any) => candidate?.uniqueId === viewerContextId)
+            : null) || (globalThis as any).VIEWER_MANAGER?.activeViewer || (globalThis as any).VIEWER;
         const canvas: HTMLCanvasElement | undefined = viewer?.drawer?.canvas || viewer?.canvas;
         if (!canvas || typeof canvas.toBlob !== "function") {
-            throw new Error("No active viewer screenshot is available.");
+            throw new Error("No viewer screenshot is available for the current chat context.");
         }
         return await new Promise<Blob>((resolve, reject) => {
             canvas.toBlob((blob) => {
@@ -1246,7 +1250,7 @@ export class ChatPanel extends BaseComponent {
 
                 let executionMessage: ChatMessage;
                 try {
-                    executionMessage = await chatModule.executeAssistantScript(script);
+                    executionMessage = await chatModule.executeAssistantScript(script, { signal });
                     const failedScript =
                         executionMessage?.role === "tool" &&
                         (executionMessage.parts || []).some((p: any) => p.type === "script-result" && p.ok === false);

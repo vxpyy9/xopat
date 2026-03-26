@@ -55,7 +55,7 @@ export interface ApplicationScriptApi extends ScriptApiObject {
     getGlobalInfo(): GlobalContextInfo[];
 
     /**
-     * Directs subsequent viewer or annotations calls to a specific window.
+     * Directs subsequent viewer or annotations calls in this script context to a specific window.
      */
     setActiveViewer(contextId: ViewerContextId): void;
 

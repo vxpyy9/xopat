@@ -18,7 +18,7 @@ ScriptingManager.registerExternalApi(
             super(
                 namespace,
                 "Read Annotations",
-                "Read annotations, comments, presets, and available annotation object types for the active viewer. Usually the viewer must be first selected by application.setActiveViewer()."
+                "Read annotations, comments, presets, and available annotation object types for the viewer bound to the current script context. Usually the viewer should be first selected for this script context by application.setActiveViewer(contextId)."
             );
         }
 
@@ -30,30 +30,42 @@ ScriptingManager.registerExternalApi(
             return module;
         }
 
-        _getActiveViewer() {
-            let viewer = VIEWER_MANAGER?.activeViewer;
-            if (viewer) return viewer;
+        _getContextState() {
+            const metadata = this.scriptingContext.metadata || (this.scriptingContext.metadata = {});
+            const state = metadata.__annotationsScriptApiContextState;
 
-            const viewers = VIEWER_MANAGER?.viewers || [];
-
-            if (viewers.length === 1) {
-                viewer = viewers[0];
-                VIEWER_MANAGER?.setActive?.(viewer);
-                return viewer;
+            if (state && typeof state === "object") {
+                return state;
             }
 
-            if (!viewers.length) {
-                throw new Error("No viewer is available. Open a slide first.");
-            }
+            metadata.__annotationsScriptApiContextState = {};
+            return metadata.__annotationsScriptApiContextState;
+        }
 
-            throw new Error(
-                "No active viewer is selected. First call application.getGlobalInfo() and then application.setActiveViewer(contextId)."
+        _getContextPresetId(isLeftClick = true) {
+            const state = this._getContextState();
+            return isLeftClick === false
+                ? (state.rightPresetId ?? null)
+                : (state.leftPresetId ?? null);
+        }
+
+        _getContextPreset(isLeftClick = true) {
+            const presetId = this._getContextPresetId(isLeftClick);
+            if (!presetId) return null;
+            return this._getModule().presets?.get?.(String(presetId)) || null;
+        }
+
+        _getBoundViewerContextId() {
+            return (
+                this.scriptingContext.getActiveViewerContextId?.()
+                ?? this.scriptingContext.activeViewerContextId
+                ?? this.scriptingContext.id
             );
         }
 
         _getFabric() {
             const module = this._getModule();
-            return module.getFabric(this._getActiveViewer());
+            return module.getFabric(this.activeViewer);
         }
 
         _clone(value) {
@@ -126,9 +138,8 @@ ScriptingManager.registerExternalApi(
         }
 
         _serializePreset(preset) {
-            const module = this._getModule();
-            const leftId = module.getPreset?.(true)?.presetID;
-            const rightId = module.getPreset?.(false)?.presetID;
+            const leftId = this._getContextPresetId(true);
+            const rightId = this._getContextPresetId(false);
             const base = preset?.toJSONFriendlyObject?.() || {};
 
             return {
@@ -209,10 +220,11 @@ ScriptingManager.registerExternalApi(
             const presets = module.presets;
 
             const ids = usedOnly
-                ? (presets.toObject?.(true) || []).map((preset) => String(preset?.presetID))
-                : (presets.getExistingIds?.() || []).map((id) => String(id));
+                ? Array.from(new Set((presets.toObject?.(true) || []).map((preset) => String(preset?.presetID ?? ""))))
+                : Array.from(new Set((presets.getExistingIds?.() || []).map((id) => String(id ?? ""))));
 
             return ids
+                .filter((id) => id)
                 .map((id) => presets.get?.(id))
                 .filter(Boolean)
                 .map((preset) => this._serializePreset(preset));
@@ -224,7 +236,7 @@ ScriptingManager.registerExternalApi(
         }
 
         getActivePreset(isLeftClick = true) {
-            const preset = this._getModule().getPreset?.(!!isLeftClick);
+            const preset = this._getContextPreset(!!isLeftClick);
             return preset ? this._serializePreset(preset) : null;
         }
 

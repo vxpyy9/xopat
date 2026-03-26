@@ -10,6 +10,24 @@ export type ScriptApiObject = {
     readonly description: string;
 };
 
+
+export type HostScriptContext = Pick<
+    ScriptingContextState,
+    "id" | "label" | "metadata" | "activeViewerContextId"
+> & {
+    getActiveViewerContextId(): string | null;
+    setActiveViewerContextId(contextId: string | null | undefined): unknown;
+};
+
+export type ScriptApiInvocationContext = {
+    scriptingContext: HostScriptContext;
+};
+
+export type ContextAwareHostAction = AnyFn & {
+    __scriptingContextAware?: boolean;
+};
+
+
 export type NamespaceSchema<TApi extends ScriptApiObject = ScriptApiObject> = {
     __self__: boolean;
     name: string;
@@ -24,15 +42,34 @@ export type NamespaceSchema<TApi extends ScriptApiObject = ScriptApiObject> = {
 
 export type ScriptApiNamespace = Record<string, AnyFn>;
 export type ScriptApiNamespaces = Record<string, ScriptApiNamespace>;
-export type ViewerActionMap<TNamespaces extends ScriptApiNamespaces = ScriptApiNamespaces> = Record<string, AnyFn>;
+export type ViewerActionMap<TNamespaces extends ScriptApiNamespaces = ScriptApiNamespaces> = Record<string, ContextAwareHostAction>;
 
 export type NamespacesState<TNamespaces extends ScriptApiNamespaces = ScriptApiNamespaces> = {
     [K in keyof TNamespaces]?: NamespaceSchema<TNamespaces[K]>;
 } & Record<string, NamespaceSchema>;
 
+export type ScriptingContextState = {
+    id: string;
+    label?: string;
+    metadata?: Record<string, unknown>;
+    activeViewerContextId?: string | null;
+    workerIds: string[];
+    createdAt: number;
+    lastUsedAt: number;
+};
+
+export type ExecuteScriptOptions = {
+    workerId?: string;
+    reuseWorker?: boolean;
+};
+
 export type WorkerRecord = {
     worker: Worker;
     channel: MessageChannel;
+    contextId: string;
+    createdAt: number;
+    lastUsedAt: number;
+    reusable?: boolean;
 };
 
 export type ApiCallMessage = {

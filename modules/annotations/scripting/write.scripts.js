@@ -14,7 +14,7 @@ ScriptingManager.registerExternalApi(
             super(
                 namespace,
                 "Write Annotations",
-                "Create and modify annotations, comments, presets, and preset visuals for the active viewer. Usually the viewer must be first selected by application.setActiveViewer()."
+                "Create and modify annotations, comments, presets, and preset visuals for the viewer bound to the current script context. Usually the viewer should be first selected for this script context by application.setActiveViewer(contextId)."
             );
 
             // Tune these for the interactive viewer budget.
@@ -30,29 +30,52 @@ ScriptingManager.registerExternalApi(
             return module;
         }
 
-        _getActiveViewer() {
-            let viewer = VIEWER_MANAGER?.activeViewer;
-            if (viewer) return viewer;
+        _getContextState() {
+            const metadata = this.scriptingContext.metadata || (this.scriptingContext.metadata = {});
+            const state = metadata.__annotationsScriptApiContextState;
 
-            const viewers = VIEWER_MANAGER?.viewers || [];
-
-            if (viewers.length === 1) {
-                viewer = viewers[0];
-                VIEWER_MANAGER?.setActive?.(viewer);
-                return viewer;
+            if (state && typeof state === "object") {
+                return state;
             }
 
-            if (!viewers.length) {
-                throw new Error("No viewer is available. Open a slide first.");
+            metadata.__annotationsScriptApiContextState = {};
+            return metadata.__annotationsScriptApiContextState;
+        }
+
+        _getContextPresetId(isLeftClick = true) {
+            const state = this._getContextState();
+            return isLeftClick === false
+                ? (state.rightPresetId ?? null)
+                : (state.leftPresetId ?? null);
+        }
+
+        _setContextPresetId(presetId, isLeftClick = true) {
+            const state = this._getContextState();
+
+            if (isLeftClick === false) {
+                state.rightPresetId = presetId ?? null;
+                return;
             }
 
-            throw new Error(
-                "No active viewer is selected. First call application.getGlobalInfo() and then application.setActiveViewer(contextId)."
+            state.leftPresetId = presetId ?? null;
+        }
+
+        _getContextPreset(isLeftClick = true) {
+            const presetId = this._getContextPresetId(isLeftClick);
+            if (!presetId) return null;
+            return this._getModule().presets?.get?.(String(presetId)) || null;
+        }
+
+        _getBoundViewerContextId() {
+            return (
+                this.scriptingContext.getActiveViewerContextId?.()
+                ?? this.scriptingContext.activeViewerContextId
+                ?? this.scriptingContext.id
             );
         }
 
         _getFabric() {
-            return this._getModule().getFabric(this._getActiveViewer());
+            return this._getModule().getFabric(this.activeViewer);
         }
 
         _clone(value) {
@@ -148,7 +171,7 @@ ScriptingManager.registerExternalApi(
                 return preset;
             }
 
-            const active = presets.getActivePreset?.(!!isLeftClick);
+            const active = this._getContextPreset(!!isLeftClick);
             if (active) return active;
 
             const ids = presets.getExistingIds?.() || [];
@@ -157,7 +180,7 @@ ScriptingManager.registerExternalApi(
             }
 
             throw new Error(
-                "No preset is available. Create or select a preset first, or pass presetID explicitly."
+                "No preset is available for this script context. Create or select a preset first, or pass presetID explicitly."
             );
         }
 
@@ -204,9 +227,8 @@ ScriptingManager.registerExternalApi(
         }
 
         _serializePreset(preset) {
-            const module = this._getModule();
-            const leftId = module.presets?.getActivePreset?.(true)?.presetID;
-            const rightId = module.presets?.getActivePreset?.(false)?.presetID;
+            const leftId = this._getContextPresetId(true);
+            const rightId = this._getContextPresetId(false);
             const base = preset?.toJSONFriendlyObject?.() || {};
 
             return {
@@ -279,13 +301,6 @@ ScriptingManager.registerExternalApi(
             }
 
             const factory = this._getFactory(factoryId);
-
-            if (preset?.objectFactory?.factoryID && preset.objectFactory.factoryID !== factory.factoryID) {
-                throw new Error(
-                    `Preset '${String(preset.presetID)}' is bound to factory '${String(preset.objectFactory.factoryID)}', ` +
-                    `but annotation creation requested '${String(factory.factoryID)}'.`
-                );
-            }
 
             if (raw.parameters === undefined) {
                 throw new Error("Annotation creation requires 'parameters'.");
@@ -514,10 +529,10 @@ ScriptingManager.registerExternalApi(
             }
 
             if (raw.activateLeft) {
-                presets.selectPreset?.(preset.presetID, true);
+                this._setContextPresetId(preset.presetID, true);
             }
             if (raw.activateRight) {
-                presets.selectPreset?.(preset.presetID, false);
+                this._setContextPresetId(preset.presetID, false);
             }
 
             this._ensurePresetSnapshot();
@@ -584,16 +599,24 @@ ScriptingManager.registerExternalApi(
         }
 
         deletePreset(id) {
-            const result = this._getModule().presets.removePreset?.(String(id));
+            const presetId = String(id);
+            const result = this._getModule().presets.removePreset?.(presetId);
 
             if (result === false) {
-                throw new Error(`Preset '${String(id)}' was not found.`);
+                throw new Error(`Preset '${presetId}' was not found.`);
             }
 
             if (result === null) {
                 throw new Error(
-                    `Preset '${String(id)}' is still used by existing annotations and cannot be removed.`
+                    `Preset '${presetId}' is still used by existing annotations and cannot be removed.`
                 );
+            }
+
+            if (this._getContextPresetId(true) === presetId) {
+                this._setContextPresetId(null, true);
+            }
+            if (this._getContextPresetId(false) === presetId) {
+                this._setContextPresetId(null, false);
             }
 
             this._ensurePresetSnapshot();
@@ -602,21 +625,20 @@ ScriptingManager.registerExternalApi(
 
         selectPreset(id, isLeftClick = true) {
             const presets = this._getModule().presets;
+            const presetId = String(id);
 
-            if (!presets.get?.(String(id))) {
-                throw new Error(`Preset '${String(id)}' was not found.`);
+            if (!presets.get?.(presetId)) {
+                throw new Error(`Preset '${presetId}' was not found.`);
             }
 
-            presets.selectPreset?.(String(id), !!isLeftClick);
-            this._ensurePresetSnapshot();
+            this._setContextPresetId(presetId, !!isLeftClick);
 
-            const preset = presets.get?.(String(id));
+            const preset = presets.get?.(presetId);
             return preset ? this._serializePreset(preset) : null;
         }
 
         clearSelectedPreset(isLeftClick = true) {
-            this._getModule().presets.selectPreset?.(undefined, !!isLeftClick);
-            this._ensurePresetSnapshot();
+            this._setContextPresetId(null, !!isLeftClick);
             return null;
         }
 

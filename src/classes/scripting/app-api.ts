@@ -17,7 +17,7 @@ export class XOpatApplicationScriptApi extends XOpatScriptingApi implements Appl
     };
 
     constructor(namespace: string) {
-        super(namespace, "Application Interface", "Manage viewer contexts and application-level metadata.");
+        super(namespace, "Application Interface", "Manage viewer contexts and application-level metadata for the current script context.");
     }
 
     getContextCount(): number {
@@ -141,7 +141,7 @@ export class XOpatApplicationScriptApi extends XOpatScriptingApi implements Appl
             throw new Error(`Unknown contextId '${contextId}'.`);
         }
 
-        VIEWER_MANAGER.setActive(viewer);
+        this.scriptingContext.setActiveViewerContextId(contextId);
     }
 
     getProjectInfo(): ScriptProjectInfo {

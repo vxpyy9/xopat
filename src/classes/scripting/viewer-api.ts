@@ -8,6 +8,8 @@ import type {
 
 import {XOpatScriptingApi} from "./abstract-api";
 
+
+// todo consider providing this as a real base class so people can reuse this, or support dependency between namespaces
 export class XOpatViewerScriptApi extends XOpatScriptingApi implements ViewerScriptApi {
 
     static ScriptApiMetadata: ScriptApiMetadata<XOpatViewerScriptApi> = {
@@ -25,33 +27,12 @@ export class XOpatViewerScriptApi extends XOpatScriptingApi implements ViewerScr
         super(
             namespace,
             "Viewer Interface",
-            "The namespace provides methods to interact with the viewer - navigation, viewport geometry, coordinate conversions, screenshots, tiled images, and metadata. Usually the viewer must be first selected by application.setActiveViewer()."
-        );
-    }
-
-    protected _getActiveViewer(): OpenSeadragon.Viewer {
-        let viewer = VIEWER_MANAGER?.activeViewer;
-        if (viewer) return viewer;
-
-        const viewers = VIEWER_MANAGER?.viewers || [];
-
-        if (viewers.length === 1) {
-            viewer = viewers[0];
-            VIEWER_MANAGER?.setActive?.(viewer);
-            return viewer;
-        }
-
-        if (!viewers.length) {
-            throw new Error("No viewer is available. Open a slide first.");
-        }
-
-        throw new Error(
-            "No active viewer is selected. First call application.getGlobalInfo() and then application.setActiveViewer(contextId)."
+            "The namespace provides methods to interact with the viewer bound to the current script context - navigation, viewport geometry, coordinate conversions, screenshots, tiled images, and metadata. Usually the viewer must be first selected for this script context by application.setActiveViewer()."
         );
     }
 
     protected _getTiledImage(index = 0): OpenSeadragon.TiledImage {
-        const viewer = this._getActiveViewer();
+        const viewer = this.activeViewer;
         const item = viewer.world?.getItemAt?.(index);
         if (!item) {
             throw new Error(`No tiled image found at index ${index}.`);
@@ -73,7 +54,7 @@ export class XOpatViewerScriptApi extends XOpatScriptingApi implements ViewerScr
     }
 
     getViewport(): ViewerViewportInfo {
-        const viewer = this._getActiveViewer();
+        const viewer = this.activeViewer;
         const center = viewer.viewport.getCenter();
         const zoom = viewer.viewport.getZoom();
         const bounds = viewer.viewport.getBounds();
@@ -99,7 +80,7 @@ export class XOpatViewerScriptApi extends XOpatScriptingApi implements ViewerScr
     }
 
     focusOn(x: number, y: number, zoom?: number, plane?: ViewerPlaneInfo): void {
-        const viewer = this._getActiveViewer();
+        const viewer = this.activeViewer;
 
         if (plane?.z !== undefined) {
             (viewer as any).bridge?.setZ?.(plane.z);
@@ -118,7 +99,7 @@ export class XOpatViewerScriptApi extends XOpatScriptingApi implements ViewerScr
     }
 
     getMetadata(): ViewerMetadata {
-        const viewer = this._getActiveViewer();
+        const viewer = this.activeViewer;
         const item = viewer.world.getItemAt(0);
         const contentSize = item?.getContentSize?.();
 
@@ -146,7 +127,7 @@ export class XOpatViewerScriptApi extends XOpatScriptingApi implements ViewerScr
     }
 
     getTiledImages() {
-        const viewer = this._getActiveViewer();
+        const viewer = this.activeViewer;
         const count = viewer.world?.getItemCount?.() ?? 0;
         const out = [];
 
@@ -171,12 +152,12 @@ export class XOpatViewerScriptApi extends XOpatScriptingApi implements ViewerScr
     }
 
     windowToViewport(x: number, y: number) {
-        const viewer = this._getActiveViewer();
+        const viewer = this.activeViewer;
         return this._point(viewer.viewport.pointFromPixel(new OpenSeadragon.Point(x, y)));
     }
 
     viewportToWindow(x: number, y: number) {
-        const viewer = this._getActiveViewer();
+        const viewer = this.activeViewer;
         return this._point(viewer.viewport.pixelFromPoint(new OpenSeadragon.Point(x, y)));
     }
 
@@ -191,21 +172,21 @@ export class XOpatViewerScriptApi extends XOpatScriptingApi implements ViewerScr
     }
 
     windowToImage(x: number, y: number, tiledImageIndex = 0) {
-        const viewer = this._getActiveViewer();
+        const viewer = this.activeViewer;
         const item: any = this._getTiledImage(tiledImageIndex);
         const vp = viewer.viewport.pointFromPixel(new OpenSeadragon.Point(x, y));
         return this._point(item.viewportToImageCoordinates(vp));
     }
 
     imageToWindow(x: number, y: number, tiledImageIndex = 0) {
-        const viewer = this._getActiveViewer();
+        const viewer = this.activeViewer;
         const item: any = this._getTiledImage(tiledImageIndex);
         const vp = item.imageToViewportCoordinates(new OpenSeadragon.Point(x, y));
         return this._point(viewer.viewport.pixelFromPoint(vp));
     }
 
     getViewportBoundsInImage(tiledImageIndex = 0) {
-        const viewer = this._getActiveViewer();
+        const viewer = this.activeViewer;
         const item: any = this._getTiledImage(tiledImageIndex);
         const bounds = viewer.viewport.getBounds();
 
@@ -228,7 +209,7 @@ export class XOpatViewerScriptApi extends XOpatScriptingApi implements ViewerScr
         regionWidth?: number;
         regionHeight?: number;
     }): string {
-        const viewer: any = this._getActiveViewer();
+        const viewer: any = this.activeViewer;
 
         if (!viewer?.drawer?.canvas) {
             throw new Error("No viewport canvas is available.");
