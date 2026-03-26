@@ -562,17 +562,24 @@ OpenSeadragon.Tools = class {
             };
         }
 
+        // Any linked viewer may be the temporary source of a sync event.
+        // A custom mapper defines how *targets* follow the source; it must not
+        // prevent the source viewer from driving the session.
+        const canLead = true;
+
         if (ctx.subscribed.includes(self)) {
             self.__sync_mapper = mapper;
+            self.__sync_canLead = canLead;
             return;
         }
 
         self.__sync_mapper = mapper;
+        self.__sync_canLead = canLead;
 
         const handler = function () {
+            if (!self.__sync_canLead) return;
 
             if (ctx.activeLeader && ctx.activeLeader !== self) return;
-
             ctx.activeLeader = self;
 
             const leaderState = self.tools.readViewportState();
@@ -581,8 +588,6 @@ OpenSeadragon.Tools = class {
                 if (!v || v === self) continue;
 
                 let state = leaderState;
-
-                // If calibrated mapper exists, transform leader state
                 if (typeof v.__sync_mapper === "function") {
                     state = v.__sync_mapper(self, leaderState);
                     if (!state) continue;
@@ -671,6 +676,7 @@ OpenSeadragon.Tools = class {
         self.removeHandler('flip', self.__sync_handler);
         delete self.__sync_handler;
         delete self.__sync_mapper;
+        delete self.__sync_canLead;
         contextData.subscribed.splice(index, 1);
     }
 
@@ -690,6 +696,7 @@ OpenSeadragon.Tools = class {
         }
         delete contextData.subscribed;
         delete contextData.leading;
+        delete contextData.activeLeader;
         delete this._linkContexts[context];
     }
 

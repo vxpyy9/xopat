@@ -1,11 +1,11 @@
-import type { ChatService } from "../chatService";
-import type { ChatModule } from "../chat";
-import { ChatSessionPicker } from "./ChatSessionPicker";
-import { ChatAttachmentBar } from "./ChatAttachmentBar";
-import { ChatMessageList } from "./ChatMessageList";
+import type {ChatService} from "../chatService";
+import type {ChatModule} from "../chat";
+import {ChatSessionPicker} from "./ChatSessionPicker";
+import {ChatAttachmentBar} from "./ChatAttachmentBar";
+import {ChatMessageList} from "./ChatMessageList";
 
 const { BaseComponent, Button, FAIcon, Checkbox } = (globalThis as any).UI;
-const { div, span, select, option, textarea, fieldset, legend } = (globalThis as any).van.tags;
+const { div, span, select, option, textarea, fieldset, legend, label, input } = (globalThis as any).van.tags;
 
 type ChatPanelOptions = {
     id?: string;
@@ -551,20 +551,49 @@ export class ChatPanel extends BaseComponent {
             return;
         }
 
+        // Toggle all
+        const allGranted = allEntries.every(([_, value]: [string, any]) => value.granted);
+
+        const toggleAllWrap = div({ class: "pb-2 mb-2 border-b border-base-200" });
+        const toggleAllCheckbox = input({
+            id: "chat-namespace-consent-grant-all",
+            type: "checkbox",
+            class: "checkbox checkbox-sm align-middle",
+            checked: allGranted,
+            onchange: (e: Event) => {
+                const checked = !!((e.target as HTMLInputElement).checked);
+                allEntries.forEach(([namespace]) => {
+                    chatModule?.setScriptNamespaceConsent?.(namespace, checked);
+                });
+                // Re-render the list to update individual checkboxes
+                this.refreshScriptConsent();
+            }
+        });
+
+        toggleAllWrap.appendChild(toggleAllCheckbox);
+        toggleAllWrap.appendChild(label({ for: "chat-namespace-consent-grant-all" }, "  ", "Grant all"));
+        content.appendChild(toggleAllWrap);
+
+
         allEntries.forEach(([namespace, value]: [string, ScriptConsentEntry]) => {
-            const wrapper = div({ class: "flex flex-col gap-1" });
-            const checkbox = new Checkbox({
-                label: value.title,
+            const wrapper = div({ class: "flex flex-row gap-1" });
+
+            wrapper.appendChild(input({
+                id: "chat-namespace-consent-" + namespace,
+                type: "checkbox",
+                class: "checkbox checkbox-sm self-center mr-1",
                 checked: value.granted,
                 onchange: (e: Event) => {
                     const checked = !!((e.target as HTMLInputElement).checked);
                     chatModule?.setScriptNamespaceConsent?.(namespace, checked);
+                    toggleAllCheckbox.checked = allEntries.every(([_, value]: [string, any]) => value.granted);
                 }
-            }).create();
-
-            wrapper.appendChild(checkbox);
+            }));
             if (value.description) {
-                wrapper.appendChild(div({ class: "text-[11px] text-base-content/70 pl-6" }, value.description));
+                wrapper.appendChild(label({
+                    style: "display: flex; flex-direction: column; gap: 0.25rem; flex: 1; pl-1",
+                    for: "chat-namespace-consent-" + namespace,
+                }, value.title, span({ class: "text-[11px] text-base-content/70" }, value.description)));
             }
             content.appendChild(wrapper);
         });
@@ -644,7 +673,10 @@ export class ChatPanel extends BaseComponent {
     }
 
     _buildSettingsContent(): HTMLElement {
-        const scriptConsentList = div({ class: "flex flex-col gap-2", "data-script-consent-list": "" });
+        const scriptConsentList = div({
+            class: "flex flex-col gap-2 max-h-48 overflow-y-auto pr-1 border border-base-200 rounded p-2",
+            "data-script-consent-list": ""
+        });
 
         const applyBtn = new Button(
             {
@@ -1215,6 +1247,28 @@ export class ChatPanel extends BaseComponent {
                 let executionMessage: ChatMessage;
                 try {
                     executionMessage = await chatModule.executeAssistantScript(script);
+                    const failedScript =
+                        executionMessage?.role === "tool" &&
+                        (executionMessage.parts || []).some((p: any) => p.type === "script-result" && p.ok === false);
+
+                    if (failedScript) {
+                        const errorText = executionMessage.content || "Script execution failed.";
+                        executionMessage = {
+                            role: "user",
+                            content:
+                                "Script execution failed.\n" +
+                                `Error: ${errorText}\n` +
+                                "Do not guess field names or methods. Use only fields explicitly shown in the allowed API. If required information is missing, ask a brief clarification question.",
+                            parts: [{
+                                type: "host-feedback",
+                                text:
+                                    "Script execution failed.\n" +
+                                    `Error: ${errorText}\n` +
+                                    "Do not guess field names or methods. Use only fields explicitly shown in the allowed API. If required information is missing, ask a brief clarification question.",
+                            }],
+                            createdAt: new Date(),
+                        };
+                    }
                 } catch (err) {
                     const errorText = err instanceof Error ? err.message : String(err);
                     executionMessage = {

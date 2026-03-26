@@ -10,15 +10,15 @@ addPlugin("nav-tracker", class extends XOpatPlugin {
         this._globalKey = null;
     }
 
-    getViewerId(viewer = VIEWER) {
+    getViewerId(viewer) {
         return viewer?.uniqueId || viewer?.id || "default";
     }
 
-    getStateKey(viewer = VIEWER) {
+    getStateKey(viewer) {
         return `${this._globalKey}::${this.getViewerId(viewer)}`;
     }
 
-    getState(viewer = VIEWER) {
+    getState(viewer) {
         if (!viewer || !this._globalKey) return null;
 
         const key = this.getStateKey(viewer);
@@ -49,7 +49,7 @@ addPlugin("nav-tracker", class extends XOpatPlugin {
         return state;
     }
 
-    getData(viewer = VIEWER) {
+    getData(viewer) {
         return this.getState(viewer)?.data || [];
     }
 
@@ -65,7 +65,7 @@ addPlugin("nav-tracker", class extends XOpatPlugin {
             Math.abs((a.rotation || 0) - (b.rotation || 0)) < eps;
     }
 
-    refreshCanvas(viewer = VIEWER, canvas) {
+    refreshCanvas(viewer, canvas) {
         if (!viewer?.viewport || !canvas) return null;
 
         const homeBounds = viewer.viewport.getHomeBounds();
@@ -79,7 +79,7 @@ addPlugin("nav-tracker", class extends XOpatPlugin {
         return homeBounds;
     }
 
-    refreshViewer(viewer = VIEWER) {
+    refreshViewer(viewer) {
         const state = this.getState(viewer);
         if (!state) return null;
 
@@ -90,7 +90,7 @@ addPlugin("nav-tracker", class extends XOpatPlugin {
         return state.navigatorBounds;
     }
 
-    ensureOverlay(viewer = VIEWER) {
+    ensureOverlay(viewer) {
         const state = this.getState(viewer);
         if (!state?.navigatorBounds || state.overlayAdded || !viewer?.navigator) return;
 
@@ -133,7 +133,7 @@ addPlugin("nav-tracker", class extends XOpatPlugin {
         return this.clamp(zoomLog / maxZoomLog);
     }
 
-    getViewportSnapshot(viewer = VIEWER, now = Date.now()) {
+    getViewportSnapshot(viewer, now = Date.now()) {
         const viewport = viewer?.viewport;
         if (!viewport) return null;
 
@@ -223,7 +223,7 @@ addPlugin("nav-tracker", class extends XOpatPlugin {
         ctx.restore();
     }
 
-    flushActiveVisit(viewer = VIEWER, endedAt = Date.now()) {
+    flushActiveVisit(viewer, endedAt = Date.now()) {
         const state = this.getState(viewer);
         if (!state?.activeVisit) return null;
 
@@ -235,7 +235,7 @@ addPlugin("nav-tracker", class extends XOpatPlugin {
         return visit;
     }
 
-    handleViewportUpdate(viewer = VIEWER) {
+    handleViewportUpdate(viewer) {
         const state = this.getState(viewer);
         if (!state) return;
 
@@ -274,7 +274,7 @@ addPlugin("nav-tracker", class extends XOpatPlugin {
         recordCtx.restore();
     }
 
-    redraw(viewer = VIEWER, now = Date.now()) {
+    redraw(viewer, now = Date.now()) {
         const state = this.getState(viewer);
         if (!state?.recordCtx || !state.canvas) return;
 
@@ -381,7 +381,7 @@ addPlugin("nav-tracker", class extends XOpatPlugin {
             }
         });
 
-        for (const viewer of (VIEWER_MANAGER?.viewers || [VIEWER]).filter(Boolean)) {
+        for (const viewer of (VIEWER_MANAGER?.viewers).filter(Boolean)) {
             this.attachViewer(viewer);
         }
     }

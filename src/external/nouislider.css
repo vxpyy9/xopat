@@ -95,7 +95,8 @@
     border-radius: 50%;
 }
 .noUi-vertical {
-    width: 18px;
+    width: 4px !important;
+    border: none !important;
 }
 .noUi-vertical .noUi-handle {
     width: 19px;
@@ -129,11 +130,14 @@
     cursor: ns-resize;
 }
 .noUi-handle {
-    border: 0;
-    border-radius: 3px;
-    background: oklch(var(--b1));              /* was var(--color-bg-primary) */
-    cursor: pointer;
-    box-shadow: 0 0 3px oklch(var(--bc) / 0.25); /* was var(--color-text-tertiary) */
+    width: 12px !important;
+    height: 12px !important;
+    right: -5px !important;
+    top: -6px !important;
+    border-radius: 50% !important;
+    background: oklch(var(--p)) !important; /* Use primary color */
+    border: 2px solid white !important;
+    box-shadow: 0 2px 4px rgba(0,0,0,0.3) !important;
 }
 .noUi-active {
     /* was: inset 0 0 1px var(--color-icon-primary),
@@ -241,7 +245,7 @@
 }
 
 .noUi-reverse .noUi-marker-vertical.noUi-marker {
-    right: 4px;
+    right: 0px;
     left: auto;
 }
 
@@ -261,6 +265,7 @@
 .noUi-handle:hover .noUi-tooltip {
     display: block;
 }
+.noUi-handle:before, .noUi-handle:after { display: none; } /* Remove default lines */
 .noUi-horizontal .noUi-tooltip {
     -webkit-transform: translate(-50%, 0);
     transform: translate(-50%, 0);
@@ -289,7 +294,9 @@
 
 /* Panel-friendly, readable slider */
 .noUi-target { background: oklch(var(--bc) / 0.14); }
-.noUi-connect { background: oklch(var(--p) / 0.65); }     /* active segment */
+.noUi-connect {
+    background: oklch(var(--p)) !important;
+}
 .noUi-vertical { width: 6px; }                           /* match JS width */
 .noUi-handle {
     width: 14px; height: 14px; border-radius: 9999px;
@@ -309,7 +316,12 @@
     font-size: 12px;
     line-height: 1;
 }
-.noUi-value-vertical { padding-left: 0; transform: translate(0, -50%); }
-
-.noUi-value-large {left: calc(100% + 15px);}
+.noUi-value-vertical {
+    background: none !important;
+    box-shadow: none !important;
+    font-weight: 700 !important;
+    color: oklch(var(--bc) / 0.5) !important;
+    padding: 0 !important;
+    margin-left: 12px !important; /* Space away from thin track */
+}
 .noUi-reverse  .noUi-value-large {right: calc(100% + 17px); left: auto; text-align: right;}

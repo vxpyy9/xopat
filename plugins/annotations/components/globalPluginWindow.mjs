@@ -268,6 +268,6 @@ export const globalPluginWindowMethods = {
     updateSelectedFormat(format) {
         this.exportOptions.format = format;
         this.context.setIOOption('format', format);
-        this.setCacheOption('defaultIOFormat', format);
+        this.cache.set('defaultIOFormat', format);
     },
 };

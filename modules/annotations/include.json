@@ -4,6 +4,8 @@
     "description": "A module that brings annotations functionality.",
     "version": "0.1.0",
     "includes" : [
+        "scripting/read.scripts.js",
+        "scripting/write.scripts.js",
         "annotations.js",
         "annotations-canvas.js",
         "ext/Sortable.min.js",
@@ -21,7 +23,7 @@
         "objects.js",
         "objectGenericFactories.js",
         "objectAdvancedFactories.js",
-        "freeFormTool.js",
+        "freeFormTool.js"
     ],
     "requires": ["fabricjs"],
     // Whether to store presets in the local storage

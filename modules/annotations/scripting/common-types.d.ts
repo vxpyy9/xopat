@@ -1,0 +1,279 @@
+export type AnnotationRef = string | number;
+
+export type AnnotationMeta = Record<string, unknown>;
+
+export type AnnotationCommentRecord = {
+    id: string;
+    author?: string | { id?: string; name?: string } | null;
+    content: string;
+    createdAt?: string | number | Date | null;
+    replyTo?: string | null;
+    removed?: boolean;
+    annotationId?: string;
+    annotationIncrementId?: number;
+};
+
+export type AnnotationRecord = Record<string, unknown> & {
+    id?: string;
+    incrementId?: number;
+    internalID?: number;
+    factoryID?: string;
+    type?: string;
+    presetID?: string;
+    layerID?: string;
+    label?: string | number;
+    color?: string;
+    author?: string | { id?: string; name?: string } | null;
+    created?: string | number | Date | null;
+    private?: boolean;
+    comments?: AnnotationCommentRecord[];
+    meta?: AnnotationMeta;
+    title?: string;
+    description?: string;
+    editable?: boolean;
+};
+
+export type AnnotationPresetRecord = {
+    presetID: string;
+    factoryID?: string;
+    color?: string;
+    meta?: Record<string, { name?: string; value?: string }>;
+    isLeftActive?: boolean;
+    isRightActive?: boolean;
+};
+
+export type AnnotationFactoryRecord = {
+    factoryID: string;
+    type?: string;
+    title?: string;
+    icon?: string;
+    editable: boolean;
+    fabricStructure?: string | string[] | string[][];
+};
+
+export interface AnnotationsScriptApi extends ScriptApiObject {
+    /**
+     * Returns the number of full annotations in the active viewer.
+     */
+    getAnnotationCount(): number;
+
+    /**
+     * Returns annotation records for the active viewer.
+     */
+    getAnnotations(): AnnotationRecord[];
+
+    /**
+     * Returns annotation records that are currently selected.
+     */
+    getSelectedAnnotations(): AnnotationRecord[];
+
+    /**
+     * Retrieves one annotation by persistent id, increment id, or internal id.
+     */
+    getAnnotation(ref: AnnotationRef): AnnotationRecord | null;
+
+    /**
+     * Returns comments from all annotations in the active viewer.
+     */
+    listComments(includeRemoved?: boolean): AnnotationCommentRecord[];
+
+    /**
+     * Returns comments attached to a specific annotation.
+     */
+    getComments(annotationRef: AnnotationRef, includeRemoved?: boolean): AnnotationCommentRecord[];
+
+    /**
+     * Indicates whether the comments feature is enabled.
+     */
+    getCommentsEnabled(): boolean;
+
+    /**
+     * Returns all presets known to the annotation module.
+     */
+    getPresets(usedOnly?: boolean): AnnotationPresetRecord[];
+
+    /**
+     * Returns one preset by id.
+     */
+    getPreset(id: string): AnnotationPresetRecord | null;
+
+    /**
+     * Returns the currently active left or right preset.
+     */
+    getActivePreset(isLeftClick?: boolean): AnnotationPresetRecord | null;
+
+    /**
+     * Lists available annotation factories / object types.
+     */
+    getAvailableFactories(): AnnotationFactoryRecord[];
+}
+
+export type AnnotationCommentInput = {
+    id?: string;
+    author?: string | { id?: string; name?: string } | null;
+    content: string;
+    createdAt?: string | number | Date | null;
+    replyTo?: string | null;
+};
+
+export type AnnotationCreateInput = {
+    /**
+     * Factory to create, such as "rect", "polygon", "point", "line", "polyline", "ruler", ...
+     * If omitted, the active or referenced preset factory is used.
+     */
+    factoryID?: string;
+
+    /**
+     * Alias for factoryID.
+     */
+    type?: string;
+
+    /**
+     * Preset to bind to the newly created annotation.
+     * If omitted, the active preset is used.
+     */
+    presetID?: string;
+
+    /**
+     * Factory-specific creation payload.
+     * Examples:
+     *  - rect: { left, top, width, height }
+     *  - point: { x, y }
+     *  - line / ruler: [x1, y1, x2, y2]
+     *  - polygon / polyline: [{x, y}, ...]
+     */
+    parameters: unknown;
+
+    /**
+     * Whether preset fallback should use the left or right active preset.
+     * Default true.
+     */
+    isLeftClick?: boolean;
+
+    meta?: AnnotationMeta;
+    private?: boolean;
+    label?: string | number;
+    author?: string | { id?: string; name?: string } | null;
+    created?: string | number | Date | null;
+    comments?: AnnotationCommentInput[];
+    layerID?: string | number | null;
+};
+
+export type AnnotationMutablePatch = {
+    presetID?: string;
+    private?: boolean;
+    label?: string | number;
+    meta?: AnnotationMeta;
+    author?: string | { id?: string; name?: string } | null;
+    created?: string | number | Date | null;
+};
+
+export type PresetMetaPatchValue =
+    | string
+    | number
+    | boolean
+    | { name?: string; value?: string | number | boolean }
+    | null;
+
+export type AnnotationPresetCreateInput = {
+    presetID?: string;
+    category?: string;
+    factoryID?: string;
+    color?: string;
+    meta?: Record<string, PresetMetaPatchValue>;
+    activateLeft?: boolean;
+    activateRight?: boolean;
+};
+
+export type AnnotationPresetUpdateInput = {
+    factoryID?: string;
+    color?: string;
+    meta?: Record<string, PresetMetaPatchValue>;
+};
+
+export type AnnotationCreateLimit = {
+    maxTotalAnnotations: number;
+    maxPerCall: number;
+};
+
+export interface AnnotationsWriteScriptApi extends ScriptApiObject {
+    /**
+     * Returns the interactive scripting guard for annotation creation.
+     */
+    getCreateLimit(): AnnotationCreateLimit;
+
+    /**
+     * Creates one annotation using the given factory-specific parameters.
+     */
+    createAnnotation(input: AnnotationCreateInput): AnnotationRecord;
+
+    /**
+     * Creates multiple annotations, subject to the interactive guard.
+     */
+    createAnnotations(inputs: AnnotationCreateInput[]): AnnotationRecord[];
+
+    /**
+     * Deletes one annotation by persistent id, increment id, or internal id.
+     */
+    deleteAnnotation(ref: AnnotationRef): boolean;
+
+    /**
+     * Deletes all matched annotations and returns the count actually deleted.
+     */
+    deleteAnnotations(refs: AnnotationRef[]): number;
+
+    /**
+     * Sets the annotation private flag.
+     */
+    setAnnotationPrivate(ref: AnnotationRef, value: boolean): AnnotationRecord;
+
+    /**
+     * Rebinds the annotation to another preset.
+     */
+    setAnnotationPreset(ref: AnnotationRef, presetId: string): AnnotationRecord;
+
+    /**
+     * Updates safe non-geometry annotation fields.
+     */
+    updateAnnotation(ref: AnnotationRef, patch: AnnotationMutablePatch): AnnotationRecord;
+
+    /**
+     * Adds a comment to the given annotation.
+     */
+    addComment(annotationRef: AnnotationRef, comment: AnnotationCommentInput | string): AnnotationCommentRecord;
+
+    /**
+     * Marks one comment as removed on the given annotation.
+     */
+    deleteComment(annotationRef: AnnotationRef, commentId: string): boolean;
+
+    /**
+     * Creates a preset.
+     */
+    createPreset(input?: AnnotationPresetCreateInput): AnnotationPresetRecord;
+
+    /**
+     * Updates a preset's factory, color, and metadata.
+     */
+    updatePreset(id: string, patch: AnnotationPresetUpdateInput): AnnotationPresetRecord;
+
+    /**
+     * Deletes a preset if it is not used by existing annotations.
+     */
+    deletePreset(id: string): boolean;
+
+    /**
+     * Selects a preset as the left or right active preset.
+     */
+    selectPreset(id: string, isLeftClick?: boolean): AnnotationPresetRecord | null;
+
+    /**
+     * Clears the left or right active preset.
+     */
+    clearSelectedPreset(isLeftClick?: boolean): null;
+
+    /**
+     * Sets a common visual property such as stroke, opacity, borderColor, ...
+     */
+    setCommonVisualProperty(propertyName: string, propertyValue: unknown): unknown;
+}

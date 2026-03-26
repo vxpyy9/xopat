@@ -138,7 +138,7 @@
             this.scalebarContainer.style.top = location.y + "px";
             //todo location works only for bottom, also setting position each time is not efficient (could use align / float)
             if (this.magnificationContainer) {
-                this.magnificationContainer.style.left = location.x + 36 + "px";
+                this.magnificationContainer.style.left = location.x + 20 + "px";
                 const h = this.magnificationContainer.offsetHeight || this.magnificationContainerHeight || 0;
                 this.magnificationContainer.style.top = (location.y - h - 12) + "px";
             }
@@ -268,7 +268,7 @@
                         if (this.magnificationContainer) return;
 
                         const viewport = this.viewer.viewport;
-                        const inside = "oklch(var(--b2))";
+                        const inside = "oklch(var(--b1))";
                         const outside = "oklch(var(--er))";
 
                         this.magnificationContainer = document.createElement("div");
@@ -282,6 +282,9 @@
                             "items-stretch",
                             "pointer-events-auto",
                             "select-none",
+                            "bg-base-200",
+                            "rounded-lg",
+                            "pt-2"
                         );
                         this.magnificationContainer.style.height = `${this.magnificationContainerHeight}px`;
                         this.magnificationContainer.style.height = `${this.magnificationContainerHeight}px`;
@@ -292,7 +295,7 @@
 
                         // --- SECTION A: ROTATION CONTROL (HOME PIP + 5 PIPS, NO BUTTONS) ---
                         const rotCol = document.createElement("div");
-                        rotCol.className = "flex flex-col items-center pb-2";
+                        rotCol.className = "flex flex-col items-center pb-2 pl-5";
 
                         const rotReadout = document.createElement("div");
                         rotReadout.className =
@@ -323,7 +326,7 @@
                             },
                         });
 
-// pip styling
+                        // pip styling
                         rotSliderContainer.querySelectorAll(".noUi-value-vertical").forEach((el) => {
                             el.classList.add(
                                 "px-1.5",
@@ -336,16 +339,15 @@
                             );
                         });
 
-// rail styling
+                        // rail styling
                         const rotSliderEl = rotSliderContainer.noUiSlider.target;
                         rotSliderEl.style.width = "6px";
                         rotSliderEl.style.border = "none";
                         rotSliderEl.style.background = inside;
 
-// feedback-loop guard
                         let rotPrevent = false;
 
-// Slider -> Viewport
+                        // Slider -> Viewport
                         const setRotation = (deg) => {
                             const normalized = ((deg % 360) + 360) % 360;
                             this.viewer.viewport.setRotation(normalized);
@@ -363,7 +365,7 @@
                             rotPrevent = false;
                         });
 
-// Viewport -> Slider
+                        // Viewport -> Slider
                         const reflectRotation = () => {
                             if (rotPrevent) return;
                             const r = ((this.viewer.viewport.getRotation() % 360) + 360) % 360; // FIX: this.viewer
@@ -375,7 +377,7 @@
                         this.viewer.addHandler("rotate", reflectRotation);
                         this._ui.onRotate = reflectRotation;
 
-// Clicking pips MUST rotate as well (programmatic set doesn't always fire 'change')
+                        // Clicking pips MUST rotate as well (programmatic set doesn't always fire 'change')
                         rotSliderContainer.querySelectorAll(".noUi-value").forEach((pip) => {
                             pip.classList.add("cursor-pointer", "hover:text-base-content");
                             pip.addEventListener("click", (e) => {
@@ -396,9 +398,6 @@
                             // optional: add a little badge-ish feel
                             homeRot.style.opacity = "1";
                         }
-
-
-
 
 
                         // --- Dynamic Range & Log Scale Calculation ---
@@ -467,7 +466,7 @@
 
                         this._ui.magSliderEl = sliderContainer;
                         const magCol = document.createElement("div");
-                        magCol.className = "flex flex-col items-center pb-2";
+                        magCol.className = "flex flex-col items-center pb-2 pr-4";
 
                         const magInput = document.createElement("input");
                         magInput.type = "number";
@@ -1254,21 +1253,20 @@
 
         return van.tags.button(
             {
-                class: () =>
-                    [
-                        "btn btn-xs absolute",
-                        enabled.val ? (isRef.val ? "btn-primary" : "btn-success") : "btn-outline"
-                    ].join(" "),
-                style: "top: -40px;",
+                class: () => [
+                    "btn btn-xs border-none absolute px-1",
+                    enabled.val ? (isRef.val ? "btn-primary" : "btn-success") : "bg-base-content/10 hover:bg-base-content/20"
+                ].join(" "),
                 onclick: onClick,
                 title: () => (enabled.val ? "Disable sync" : "Enable sync"),
+                style: "left: -10px; top: -15px;"
             },
-            van.tags.span(
-                { class: "flex items-center gap-2" },
+            // Use a simple Link icon or text abbreviation
+            van.tags.span({ class: "text-[10px] font-bold" },
                 () => {
-                    if (busy.val && progressText.val) return `Sync: ${progressText.val}`;
-                    if (!enabled.val) return "Sync: OFF";
-                    return isRef.val ? "Sync: REF" : "Sync: ON";
+                    if (busy.val) return "...";
+                    if (!enabled.val) return "LINK";
+                    return isRef.val ? "REF" : "SYNC";
                 }
             )
         );
@@ -1286,94 +1284,141 @@
 
         isEnabled() { return this.enabled; }
 
+        _getSession() {
+            if (!ViewportSyncAPI._session) {
+                ViewportSyncAPI._session = {
+                    context: this.context || 0,
+                    leaderId: null,     // first calibrated viewer; used only as reference space
+                    leaderPts: null,
+                    transforms: {},     // viewerId -> { A, b, invA, scale, rotDeg }
+                    flipParity: {}      // viewerId -> boolean, relative to reference viewer
+                };
+            }
+
+            const S = ViewportSyncAPI._session;
+            S.transforms ||= {};
+            S.flipParity ||= {};
+            if (typeof S.context !== "number") S.context = this.context || 0;
+            return S;
+        }
+
+        _findViewerById(viewerId) {
+            return (window.VIEWER_MANAGER?.viewers || []).find(v => v?.uniqueId === viewerId) || null;
+        }
+
+        _getLinkedPeers() {
+            const S = this._getSession();
+            return OpenSeadragon.Tools?._linkContexts?.[S.context]?.subscribed || [];
+        }
+
+        _identityTransform() {
+            return {
+                A: [1, 0, 0, 1],
+                b: { x: 0, y: 0 },
+                invA: [1, 0, 0, 1],
+                scale: 1,
+                rotDeg: 0
+            };
+        }
+
+        _normalizeTransform(t) {
+            if (!t) return null;
+            const invA = t.invA || this._invert2x2(t.A);
+            if (!invA) return null;
+            return {
+                A: t.A,
+                b: { x: t.b.x, y: t.b.y },
+                invA,
+                scale: t.scale || 1,
+                rotDeg: t.rotDeg || 0
+            };
+        }
+
+        _storeViewerTransform(viewerId, t) {
+            const S = this._getSession();
+            const normalized = this._normalizeTransform(t);
+            if (!normalized) throw new Error("Invalid calibration transform");
+            S.transforms[viewerId] = normalized;
+            this.transforms.set(viewerId, normalized);
+            return normalized;
+        }
+
+        _getViewerTransform(viewerId) {
+            const S = this._getSession();
+            const t = S.transforms?.[viewerId];
+            return this._normalizeTransform(t);
+        }
+
+        _setFlipParity(viewerId, parity) {
+            this._getSession().flipParity[viewerId] = !!parity;
+        }
+
+        _getFlipParity(viewerId) {
+            return !!this._getSession().flipParity?.[viewerId];
+        }
+
+        _xorBool(...vals) {
+            return vals.reduce((acc, v) => acc !== !!v, false);
+        }
+
         async enable() {
             if (this.enabled) return;
 
-            // 1) Ensure we have reference points for the leading viewer
-            // The leader is: the first viewer that gets linked in this session.
-            // We'll keep it simple: if no leader points exist yet, this viewer becomes leader.
-            if (!ViewportSyncAPI._session) ViewportSyncAPI._session = { context: 0, leaderId: null, leaderPts: null };
-
-            const S = ViewportSyncAPI._session;
+            const S = this._getSession();
+            const selfId = this.master.uniqueId;
 
             if (!S.leaderId) {
-                // This viewer becomes the leader; calibrate ONLY this viewer once.
+                // First calibrated viewer defines the reference image space only.
                 this.__ui?.setProgress?.("0/3");
                 const refPts = await this.calibrateViewer(this.master);
-                S.leaderId = this.master.uniqueId;
+
+                S.leaderId = selfId;
                 S.leaderPts = refPts;
-                // Link ONLY this viewer
-                this.master.tools.link(S.context);
-                this.enabled = true;
-                this.master.__syncToolChanged();
-                return;
+                this.points.set(selfId, refPts);
+                this._storeViewerTransform(selfId, this._identityTransform());
+                this._setFlipParity(selfId, false);
+            } else if (!this._getViewerTransform(selfId)) {
+                // Calibrate this viewer once against the shared reference image space.
+                this.__ui?.setProgress?.("0/3");
+                const tgtPts = await this.calibrateViewer(this.master);
+                this.points.set(selfId, tgtPts);
+
+                const t = this._similarityFrom3(S.leaderPts, tgtPts);
+                if (!t) throw new Error("Calibration invalid");
+                this._storeViewerTransform(selfId, t);
+
+                const refViewer = this._findViewerById(S.leaderId);
+                const refFlip = refViewer?.viewport?.getFlip?.() ?? false;
+                const selfFlip = this.master?.viewport?.getFlip?.() ?? false;
+                this._setFlipParity(selfId, this._xorBool(selfFlip, refFlip));
             }
 
-            // 2) Non-leader: calibrate THIS viewer only, align it to leader, then link it.
-            this.__ui?.setProgress?.("0/3");
-            const tgtPts = await this.calibrateViewer(this.master);
-
-            const t = this._similarityFrom3(S.leaderPts, tgtPts);
-            if (!t) throw new Error("Calibration invalid");
-
-            const leaderViewer = (window.VIEWER_MANAGER?.viewers || []).find(v => v?.uniqueId === S.leaderId);
-            if (!leaderViewer) throw new Error("Leader viewer not found");
-
-            this._alignTargetToLeaderNow(leaderViewer, this.master, t);
-
-            // join link session only now
-            this.master.tools.link(S.context, (leaderViewer, leaderState) => {
-
-                const refItem = leaderViewer.world.getItemAt(0);
-                const tgtItem = this.master.world.getItemAt(0);
-                if (!refItem || !tgtItem) return null;
-
-                const refCenterImg =
-                    refItem.viewportToImageCoordinates(leaderState.center);
-
-                if (!isFinite(refCenterImg.x) || !isFinite(refCenterImg.y))
-                    return null;
-
-                const mapped = this._mul2x2_vec(t.A, refCenterImg);
-
-                const targetCenterImg = {
-                    x: mapped.x + t.b.x,
-                    y: mapped.y + t.b.y
-                };
-
-                const tgtCenterVp =
-                    tgtItem.imageToViewportCoordinates(
-                        new OpenSeadragon.Point(
-                            targetCenterImg.x,
-                            targetCenterImg.y
-                        )
-                    );
-
-                if (!isFinite(tgtCenterVp.x) || !isFinite(tgtCenterVp.y))
-                    return null;
-
-                return {
-                    center: tgtCenterVp,
-                    zoom: leaderState.zoom / (t.scale || 1),
-                    rotation: leaderState.rotation + t.rotDeg,
-                    flip: leaderState.flip
-                };
+            // The reference viewer also uses the generic mapper so it can follow
+            // any other viewer via the inverse registration.
+            this.master.tools.link(S.context, (sourceViewer, sourceState) => {
+                return this._mapStateBetweenViewers(sourceViewer, this.master, sourceState);
             });
+
             this.enabled = true;
+
+            // Make the newly joined viewer snap to the current synced pose using
+            // whichever linked viewer is already active in the session.
+            const peers = this._getLinkedPeers().filter(v => v && v !== this.master);
+            const sourceViewer = peers[0] || this._findViewerById(S.leaderId);
+            if (sourceViewer && sourceViewer !== this.master) {
+                this._alignTargetToSourceNow(sourceViewer, this.master);
+            }
+
+            this.master.__syncToolChanged?.();
         }
 
         disable() {
             if (!this.enabled) return;
-            const S = ViewportSyncAPI._session || { context: 0 };
+            const S = this._getSession();
 
             this.master.tools?.unlink?.(S.context);
             this.enabled = false;
-
-            // If the leader was disabled, clear leader reference so next enable establishes a new leader.
-            if (S.leaderId === this.master.uniqueId) {
-                S.leaderId = null;
-                S.leaderPts = null;
-            }
+            this.master.__syncToolChanged?.();
         }
 
         async calibrateViewer(viewer) {
@@ -1523,29 +1568,72 @@
             return cancel;
         }
 
-        _alignTargetToLeaderNow(leaderViewer, targetViewer, t) {
-            const state = leaderViewer.tools.readViewportState();
+        _mapImagePointToReference(imgPt, t) {
+            if (!t) return null;
+            const shifted = { x: imgPt.x - t.b.x, y: imgPt.y - t.b.y };
+            return this._mul2x2_vec(t.invA, shifted);
+        }
 
-            const refItem = leaderViewer.world.getItemAt(0);
-            if (!refItem) return;
+        _mapImagePointFromReference(refPt, t) {
+            if (!t) return null;
+            const mapped = this._mul2x2_vec(t.A, refPt);
+            return { x: mapped.x + t.b.x, y: mapped.y + t.b.y };
+        }
 
-            const refCenterImg = refItem.viewportToImageCoordinates(state.center);
+        _mapStateBetweenViewers(sourceViewer, targetViewer, sourceState) {
+            if (!sourceViewer || !targetViewer || !sourceState) return null;
+            if (sourceViewer === targetViewer) return sourceState;
 
-            const mapped = this._mul2x2_vec(t.A, refCenterImg);
-            const targetCenterImg = { x: mapped.x + t.b.x, y: mapped.y + t.b.y };
+            const sourceItem = sourceViewer.world.getItemAt(0);
+            const targetItem = targetViewer.world.getItemAt(0);
+            if (!sourceItem || !targetItem) return null;
 
-            const tgtItem = targetViewer.world.getItemAt(0);
-            if (!tgtItem) return;
+            const sourceT = this._getViewerTransform(sourceViewer.uniqueId);
+            const targetT = this._getViewerTransform(targetViewer.uniqueId);
+            if (!sourceT || !targetT) return null;
 
-            const tgtCenterVp = tgtItem.imageToViewportCoordinates(new OpenSeadragon.Point(targetCenterImg.x, targetCenterImg.y));
+            const sourceCenterImg = sourceItem.viewportToImageCoordinates(sourceState.center);
+            if (!isFinite(sourceCenterImg.x) || !isFinite(sourceCenterImg.y)) return null;
 
+            const refCenterImg =
+                sourceViewer.uniqueId === this._getSession().leaderId
+                    ? { x: sourceCenterImg.x, y: sourceCenterImg.y }
+                    : this._mapImagePointToReference(sourceCenterImg, sourceT);
+            if (!refCenterImg || !isFinite(refCenterImg.x) || !isFinite(refCenterImg.y)) return null;
 
-            targetViewer.tools.applyViewportState({
-                center: tgtCenterVp,
-                zoom: state.zoom / (t.scale || 1),
-                rotation: state.rotation + t.rotDeg,
-                flip: leaderViewer.viewport.flip
-            });
+            const targetCenterImg =
+                targetViewer.uniqueId === this._getSession().leaderId
+                    ? refCenterImg
+                    : this._mapImagePointFromReference(refCenterImg, targetT);
+            if (!targetCenterImg || !isFinite(targetCenterImg.x) || !isFinite(targetCenterImg.y)) return null;
+
+            const targetCenterVp = targetItem.imageToViewportCoordinates(
+                new OpenSeadragon.Point(targetCenterImg.x, targetCenterImg.y)
+            );
+            if (!isFinite(targetCenterVp.x) || !isFinite(targetCenterVp.y)) return null;
+
+            const zoom = sourceState.zoom * ((sourceT.scale || 1) / (targetT.scale || 1));
+            const rotation = sourceState.rotation + (sourceT.rotDeg || 0) - (targetT.rotDeg || 0);
+            const flip = this._xorBool(
+                !!sourceState.flip,
+                this._getFlipParity(sourceViewer.uniqueId),
+                this._getFlipParity(targetViewer.uniqueId)
+            );
+
+            return {
+                center: targetCenterVp,
+                zoom,
+                rotation,
+                flip
+            };
+        }
+
+        _alignTargetToSourceNow(sourceViewer, targetViewer) {
+            const sourceState = sourceViewer?.tools?.readViewportState?.();
+            const mappedState = this._mapStateBetweenViewers(sourceViewer, targetViewer, sourceState);
+            if (mappedState) {
+                targetViewer.tools.applyViewportState(mappedState);
+            }
         }
 
         _invert2x2(m) {
@@ -1571,40 +1659,57 @@
         }
 
         _similarityFrom3(refPts, tgtPts) {
-            // Build matrices from vectors: R = [r2-r1, r3-r1], T = [t2-t1, t3-t1]
-            const r1 = refPts[0], r2 = refPts[1], r3 = refPts[2];
-            const t1 = tgtPts[0], t2 = tgtPts[1], t3 = tgtPts[2];
+            const rc = {
+                x: (refPts[0].x + refPts[1].x + refPts[2].x) / 3,
+                y: (refPts[0].y + refPts[1].y + refPts[2].y) / 3
+            };
+            const tc = {
+                x: (tgtPts[0].x + tgtPts[1].x + tgtPts[2].x) / 3,
+                y: (tgtPts[0].y + tgtPts[1].y + tgtPts[2].y) / 3
+            };
 
-            const R = [
-                (r2.x - r1.x), (r3.x - r1.x),
-                (r2.y - r1.y), (r3.y - r1.y),
+            let a = 0, b = 0, denom = 0;
+
+            for (let i = 0; i < 3; i++) {
+                const rx = refPts[i].x - rc.x;
+                const ry = refPts[i].y - rc.y;
+                const tx = tgtPts[i].x - tc.x;
+                const ty = tgtPts[i].y - tc.y;
+
+                a += rx * tx + ry * ty;
+                b += rx * ty - ry * tx;
+                denom += rx * rx + ry * ry;
+            }
+
+            if (!isFinite(denom) || denom < 1e-12) return null;
+
+            const norm = Math.hypot(a, b);
+            if (!isFinite(norm) || norm < 1e-12) return null;
+
+            const scale = norm / denom;
+            const cos = a / norm;
+            const sin = b / norm;
+
+            const A = [
+                scale * cos, -scale * sin,
+                scale * sin,  scale * cos
             ];
-            const T = [
-                (t2.x - t1.x), (t3.x - t1.x),
-                (t2.y - t1.y), (t3.y - t1.y),
-            ];
 
-            const Rinv = this._invert2x2(R);
-            if (!Rinv) return null;
+            const Arc = {
+                x: A[0] * rc.x + A[1] * rc.y,
+                y: A[2] * rc.x + A[3] * rc.y
+            };
 
-            // A = T * inv(R)
-            const A = this._mul2x2(T, Rinv);
+            const t = {
+                x: tc.x - Arc.x,
+                y: tc.y - Arc.y
+            };
 
-            // translation b = t1 - A*r1
-            const Ar1 = this._mul2x2_vec(A, r1);
-            const b = { x: t1.x - Ar1.x, y: t1.y - Ar1.y };
+            const rotDeg = Math.atan2(A[2], A[0]) * 180 / Math.PI;
+            const invA = this._invert2x2(A);
+            if (!invA) return null;
 
-            // Extract rotation + uniform scale from A (approx)
-            const col0 = { x: A[0], y: A[2] };
-            const col1 = { x: A[1], y: A[3] };
-            const s0 = Math.hypot(col0.x, col0.y);
-            const s1 = Math.hypot(col1.x, col1.y);
-            const scale = (s0 + s1) / 2 || 1;
-
-            const rotRad = Math.atan2(col0.y, col0.x);
-            const rotDeg = rotRad * 180 / Math.PI;
-
-            return { A, b, scale, rotDeg };
+            return { A, b: t, invA, scale, rotDeg };
         }
     }
 }(OpenSeadragon));

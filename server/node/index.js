@@ -318,9 +318,13 @@ ${core.requireCore("loader")}
 ${core.requireCore("deps")}
 ${core.requireCore("app")}
 ${core.requireCore("env")}
+<script src="${constants.SERVER_ROOT}client-rpc.js"></script>
 <script>
 window.XOPAT_CSRF_TOKEN = '${session ? session.csrfToken : ''}';
-</script>${serverRuntime.getClientBootstrap()}
+window.xserver = window.xserver || XOpatServerRPC.createClient({
+  getViewerId: () => window.VIEWER?.id || undefined
+});
+</script>
 `;
 
             case "app":

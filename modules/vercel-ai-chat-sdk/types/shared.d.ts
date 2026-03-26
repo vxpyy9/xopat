@@ -80,7 +80,7 @@ interface ChatMessage {
   role: ChatRole;
   parts?: ChatMessagePart[];
   content?: string;
-  createdAt?: Date | string;
+  createdAt?: Date | string | undefined;
   metadata?: Record<string, unknown>;
 }
 
@@ -264,3 +264,10 @@ interface ProviderModelListResult {
   providerTypeId?: string;
   models: ChatProviderModelInfo[];
 }
+
+type ScriptNamespaceConsentState = Record<string, { title: string; granted: boolean; description?: string }>;
+
+type ChatConfigShape = {
+    personalities?: ChatPersonality[];
+    defaultPersonalityId?: string;
+};

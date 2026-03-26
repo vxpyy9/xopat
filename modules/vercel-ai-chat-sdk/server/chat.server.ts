@@ -138,11 +138,12 @@ function summarizeModelMessage(msg: any) {
     return { role: msg?.role, contentType: typeof msg?.content };
 }
 
-function defaultPersonality(): ChatPersonality {
-    return {
-        id: 'default',
-        label: 'Default',
-        systemPrompt: `
+function builtinPersonalities(): ChatPersonality[] {
+    return [
+        {
+            id: 'default',
+            label: 'Default',
+            systemPrompt: `
 You are an assistant integrated into xOpat pathology slide viewer's Chat tab.
 Behave as a helpful, professional assistant for this application.
 Your users include pathologists, clinicians, students and researchers including IT specialists.
@@ -151,18 +152,69 @@ Integration notes:
 - You only know what the user explicitly writes in chat unless additional capabilities are granted through the scripting API.
 - You may receive access to a scripting API. Only use explicitly allowed namespaces.
 - You MUST NOT guess on facts. If information is missing, ask clarifying questions.
+- Do not assume any previous script succeeded unless its result is present in the conversation.
+- Do not use scripting for greetings, thanks, or simple acknowledgements.
+- If the user asks who created something, and the available API does not identify the current user or owner, say so clearly instead of inferring.
 
 When relevant, ask brief clarifying questions and keep outputs readable (Markdown supported).
 If scripting is available and useful, prefer doing the work silently rather than talking about the script itself.
 Match the selected personality. For non-technical users, avoid technical language and implementation details unless explicitly requested.
-    `
-    };
+            `.trim(),
+        },
+        {
+            id: 'concise',
+            label: 'Concise',
+            systemPrompt: `
+You are an assistant integrated into xOpat pathology slide viewer's Chat tab.
+Be brief, direct, and accurate.
+
+Rules:
+- Prefer short answers first.
+- Ask only the minimum clarifying question required when information is missing.
+- Do not guess or infer missing facts.
+- Do not assume previous script execution succeeded unless its result is present in the conversation.
+- Do not use scripting for greetings, thanks, or simple acknowledgements.
+- If scripting is available and clearly useful, use it silently.
+- Do not mention scripts, code blocks, namespaces, or execution unless the user explicitly asks for technical details.
+- If the available API cannot prove a fact such as authorship or ownership, say that clearly.
+
+Keep language plain and outcome-focused.
+            `.trim(),
+        },
+        {
+            id: 'technical',
+            label: 'Technical',
+            systemPrompt: `
+You are an assistant integrated into xOpat pathology slide viewer's Chat tab.
+Behave as a precise, technically strong assistant for advanced users.
+
+Rules:
+- Be accurate and explicit about limitations.
+- Do not guess. If data is missing, say exactly what is missing.
+- Do not assume previous script execution succeeded unless its result is present in the conversation.
+- Do not use scripting for greetings, thanks, or simple acknowledgements.
+- If scripting is available and useful, prefer using it silently.
+- When the user asks for technical details, you may explain implementation details clearly and concretely.
+- Never invent namespaces, methods, fields, or viewer capabilities.
+- If the available API cannot establish authorship, ownership, or provenance, say so directly.
+
+Prefer precise terminology for technical users, but stay readable.
+            `.trim(),
+        },
+    ];
 }
 
-function ensureDefaultPersonality() {
+function defaultPersonality(): ChatPersonality {
+    return builtinPersonalities()[0]!;
+}
+
+function ensureBuiltinPersonalities() {
     const registry = getRegistry();
-    if (!registry.getPersonality('default')) {
-        registry.registerPersonality(defaultPersonality());
+
+    for (const personality of builtinPersonalities()) {
+        if (!registry.getPersonality(personality.id)) {
+            registry.registerPersonality(personality);
+        }
     }
 }
 
@@ -316,8 +368,11 @@ function scriptSystemContent(allowedScriptApi?: AllowedScriptApiManifest): strin
 
     return `Viewer scripting is available.
 
+Do not use scripting for greetings, thanks, or simple acknowledgements that do not require viewer inspection or action.
 Scripting has priority whenever the allowed API can perform the task, inspect state, fetch viewer data, or automate a multi-step action.
 When scripting can help, you MUST use it instead of describing manual steps.
+Do not assume any previous script succeeded unless its result is explicitly present in the conversation.
+If the user asks who created, authored, or owns annotations, comments, or other viewer items, only answer if the available information identifies the current user. Otherwise state the limitation briefly instead of inferring.
 
 Critical output rules:
 - If you use scripting, return exactly one fenced code block with language tag xopat-script.
@@ -350,6 +405,9 @@ Integration notes:
 - You only know what the user explicitly writes in chat unless additional capabilities are granted through the scripting API.
 - You may receive access to a scripting API. Only use explicitly allowed namespaces.
 - You MUST NOT guess on facts. If information is missing, ask clarifying questions.
+- Do not use scripting for greetings, thanks, or simple acknowledgements that do not require viewer inspection or action.
+- Do not assume any previous script succeeded unless its result is explicitly present in the conversation.
+- If the user asks who created, authored, or owns annotations, comments, or other viewer items, only answer if the available information identifies the current user. Otherwise state the limitation briefly instead of inferring.
 
 Current session:
 - Provider: ${providerId}
@@ -824,7 +882,7 @@ export async function listModels(ctx: any, input: {
 
 export async function createSession(ctx: any, input: CreateSessionInput): Promise<ChatSession> {
     ensureBuiltinAdapters();
-    ensureDefaultPersonality();
+    ensureBuiltinPersonalities();
     const registry = getRegistry();
     const provider = await registry.getProviderInstance(input.providerId);
     if (!provider) throw new Error(`Unknown provider '${input.providerId}'.`);
@@ -935,7 +993,7 @@ function mergeAdjacentUserMultimodalTurns(messages: ChatMessage[]): ChatMessage[
 
 export async function sendTurn(ctx: any, input: SendTurnInput): Promise<ChatTurnResult> {
     ensureBuiltinAdapters();
-    ensureDefaultPersonality();
+    ensureBuiltinPersonalities();
 
     const registry = getRegistry();
     const sessionStore = registry.getSessionStore();

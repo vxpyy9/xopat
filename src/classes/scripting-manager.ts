@@ -71,12 +71,11 @@ export class ScriptingManager<
     }
 
     async initialize(): Promise<void> {
-        if (this._initializing) {
-            await this.ready;
-            return;
+        if (this.ready) return this.ready;
+        if (!this._initializing) {
+            this.ready = this._initializeBuiltins();
         }
-        if (this.ready) return;
-        await this._initializeBuiltins();
+        return this.ready;
     }
 
     private async _initializeBuiltins(): Promise<void> {
@@ -96,14 +95,15 @@ export class ScriptingManager<
         }
     }
 
-    protected _registerExternalApiRegistration(
+    protected async _registerExternalApiRegistration(
         registration: ExternalScriptApiRegistration<TNamespaces>
-    ): Promise<void> | void {
+    ): Promise<void> {
+        if (!this.ready) {
+            // we will do it once at init time, the preferred way
+            return;
+        }
         if (!this._bootstrapClosed) {
-            this.ready = this.ready.then(async () => {
-                await this._ingestExternalRegistration(registration);
-            });
-            return this.ready;
+            await this.initialize();
         }
 
         const workerCount = Object.keys(this.workers).length;
@@ -218,21 +218,14 @@ export class ScriptingManager<
 
     protected parseDtsForApi<TApi extends ScriptApiObject>(apiInstance: TApi, dtsText: string): ParsedDts {
         const interfaceName = this.findApiInterfaceName(apiInstance, dtsText);
+        const interfaceDecl = this.extractExportDeclaration(dtsText, "interface", interfaceName);
 
-        const interfaceRegex = new RegExp(
-            `export\\s+interface\\s+${interfaceName}\\s+extends\\s+[^\\{]+\\{([\\s\\S]*?)\\n\\}`,
-            "m"
-        );
-        const match = dtsText.match(interfaceRegex);
-        if (!match) {
+        if (!interfaceDecl) {
             throw new Error(`Could not find interface '${interfaceName}' in dtypes file.`);
         }
 
-        const interfaceBody = match[1] || "";
+        const interfaceBody = this.extractInterfaceBody(interfaceDecl);
         const namespaceTsDeclaration = this.collectRelevantDeclarations(dtsText, interfaceName);
-
-        const methodRegex =
-            /(?:\/\*\*([\s\S]*?)\*\/\s*)?([A-Za-z_]\w*)\s*\(([^)]*)\)\s*:\s*([^;]+);/g;
 
         const parsed: ParsedDts = {
             namespaceTsDeclaration,
@@ -243,14 +236,27 @@ export class ScriptingManager<
             docs: {},
         };
 
-        let m: RegExpExecArray | null;
-        while ((m = methodRegex.exec(interfaceBody)) !== null) {
-            const rawDoc = m[1] || "";
-            const methodName = m[2]!;
-            const paramsText = (m[3] || "").trim();
-            const returns = (m[4] || "void").trim();
-            const declaration = `${methodName}(${paramsText}): ${returns};`;
-            const signature = `${methodName}(${paramsText}): ${returns}`;
+        for (const statement of this.splitTopLevelStatements(interfaceBody)) {
+            const trimmed = statement.trim();
+            if (!trimmed) continue;
+
+            const docMatch = trimmed.match(/^\/\*\*([\s\S]*?)\*\/\s*/);
+            const rawDoc = docMatch?.[1] || "";
+            const withoutDoc = trimmed.slice(docMatch?.[0]?.length || 0).trim();
+
+            const methodMatch = withoutDoc.match(
+                /^([A-Za-z_]\w*)\s*(<[\s\S]*?>)?\s*\(([\s\S]*)\)\s*:\s*([\s\S]+)$/
+            );
+
+            if (!methodMatch) continue;
+
+            const methodName = methodMatch[1]!;
+            const genericPart = methodMatch[2] || "";
+            const paramsText = (methodMatch[3] || "").trim();
+            const returns = (methodMatch[4] || "void").trim();
+
+            const declaration = `${methodName}${genericPart}(${paramsText}): ${returns};`;
+            const signature = `${methodName}${genericPart}(${paramsText}): ${returns}`;
 
             parsed.tsDeclaration[methodName] = declaration;
             parsed.tsSignature[methodName] = signature;
@@ -262,38 +268,27 @@ export class ScriptingManager<
         return parsed;
     }
 
-    protected findApiInterfaceName<TApi extends ScriptApiObject>(apiInstance: TApi, dtsText: string): string {
-        const ctorName = (apiInstance as any)?.constructor?.name || "";
-        const stripped = ctorName.replace(/^XOpat/, "").replace(/ScriptApi$/, "ScriptApi");
-
-        // e.g. XOpatApplicationScriptApi -> ApplicationScriptApi
-        const guess = stripped || `${apiInstance.namespace[0]!.toUpperCase()}${apiInstance.namespace.slice(1)}ScriptApi`;
-
-        if (new RegExp(`export\\s+interface\\s+${guess}\\b`).test(dtsText)) {
-            return guess;
-        }
-
-        const matches = [...dtsText.matchAll(/export\s+interface\s+([A-Za-z_]\w*)\s+extends\s+ScriptApiObject/g)];
-        if (matches.length === 1) {
-            return matches[0]![1]!;
-        }
-
-        throw new Error(
-            `Could not infer API interface name for namespace '${apiInstance.namespace}'. ` +
-            `Expected something like '${guess}'.`
-        );
-    }
-
     protected collectRelevantDeclarations(dtsText: string, interfaceName: string): string {
         const blocks: string[] = [];
 
         const importLines = dtsText.match(/^import[^\n]+$/gm) || [];
         if (importLines.length) blocks.push(importLines.join("\n"));
 
-        const typeBlocks = dtsText.match(/export\s+(?:type|interface)\s+[A-Za-z_]\w*[\s\S]*?(?=\nexport\s+(?:type|interface)\s+|\s*$)/gm) || [];
-        for (const block of typeBlocks) {
-            if (block.includes(`interface ${interfaceName}`) || !/extends\s+ScriptApiObject/.test(block)) {
-                blocks.push(block.trim());
+        const exportMatches = [
+            ...dtsText.matchAll(/^export\s+(type|interface)\s+([A-Za-z_]\w*)\b/gm),
+        ];
+
+        for (const match of exportMatches) {
+            const kind = match[1] as "type" | "interface";
+            const name = match[2]!;
+            const decl = this.extractExportDeclaration(dtsText, kind, name);
+            if (!decl) continue;
+
+            const isTargetInterface = kind === "interface" && name === interfaceName;
+            const isOtherScriptApiInterface = /extends\s+ScriptApiObject\b/.test(decl) && !isTargetInterface;
+
+            if (isTargetInterface || !isOtherScriptApiInterface) {
+                blocks.push(decl.trim());
             }
         }
 
@@ -301,20 +296,518 @@ export class ScriptingManager<
     }
 
     protected parseTsParams(paramsText: string): Array<{ name: string; type: string }> {
-        if (!paramsText.trim()) return [];
+        const text = paramsText.trim();
+        if (!text) return [];
 
-        return paramsText
-            .split(",")
-            .map(s => s.trim())
+        return this.splitTopLevelByComma(text)
+            .map(part => part.trim())
             .filter(Boolean)
             .map(part => {
-                const idx = part.indexOf(":");
-                if (idx === -1) return { name: part.replace(/\?$/, "").trim(), type: "unknown" };
+                const idx = this.findTopLevelColon(part);
+                if (idx === -1) {
+                    return { name: part.replace(/\?$/, "").trim(), type: "unknown" };
+                }
 
                 const name = part.slice(0, idx).trim().replace(/\?$/, "");
                 const type = part.slice(idx + 1).trim();
                 return { name, type };
             });
+    }
+
+    protected extractExportDeclaration(
+        dtsText: string,
+        kind: "type" | "interface",
+        name: string
+    ): string | null {
+        const startMatch = new RegExp(`^export\\s+${kind}\\s+${name}\\b`, "m").exec(dtsText);
+        if (!startMatch || startMatch.index === undefined) return null;
+
+        const start = startMatch.index;
+        let i = start;
+
+        let braceDepth = 0;
+        let parenDepth = 0;
+        let bracketDepth = 0;
+        let angleDepth = 0;
+
+        let inString: '"' | "'" | "`" | null = null;
+        let inLineComment = false;
+        let inBlockComment = false;
+
+        let seenEquals = false;
+        let seenOpeningBrace = false;
+
+        const startsTopLevelExport = (index: number) =>
+            (index === 0 || dtsText[index - 1] === "\n") &&
+            dtsText.slice(index).startsWith("export ");
+
+        for (; i < dtsText.length; i++) {
+            const ch = dtsText[i]!;
+            const next = dtsText[i + 1] || "";
+
+            if (inLineComment) {
+                if (ch === "\n") inLineComment = false;
+                continue;
+            }
+
+            if (inBlockComment) {
+                if (ch === "*" && next === "/") {
+                    inBlockComment = false;
+                    i++;
+                }
+                continue;
+            }
+
+            if (inString) {
+                if (ch === "\\" && next) {
+                    i++;
+                    continue;
+                }
+                if (ch === inString) {
+                    inString = null;
+                }
+                continue;
+            }
+
+            if (ch === "/" && next === "/") {
+                inLineComment = true;
+                i++;
+                continue;
+            }
+
+            if (ch === "/" && next === "*") {
+                inBlockComment = true;
+                i++;
+                continue;
+            }
+
+            if (ch === '"' || ch === "'" || ch === "`") {
+                inString = ch as '"' | "'" | "`";
+                continue;
+            }
+
+            if (ch === "=") seenEquals = true;
+
+            if (ch === "{") {
+                braceDepth++;
+                seenOpeningBrace = true;
+                continue;
+            }
+            if (ch === "}") {
+                if (braceDepth > 0) braceDepth--;
+
+                if (kind === "interface" && seenOpeningBrace && braceDepth === 0) {
+                    i++;
+                    break;
+                }
+                continue;
+            }
+
+            if (ch === "(") parenDepth++;
+            else if (ch === ")" && parenDepth > 0) parenDepth--;
+
+            else if (ch === "[") bracketDepth++;
+            else if (ch === "]" && bracketDepth > 0) bracketDepth--;
+
+            else if (ch === "<") angleDepth++;
+            else if (ch === ">" && angleDepth > 0) angleDepth--;
+
+            if (
+                kind === "type" &&
+                ch === ";" &&
+                braceDepth === 0 &&
+                parenDepth === 0 &&
+                bracketDepth === 0 &&
+                angleDepth === 0
+            ) {
+                i++;
+                break;
+            }
+
+            if (
+                i > start &&
+                braceDepth === 0 &&
+                parenDepth === 0 &&
+                bracketDepth === 0 &&
+                angleDepth === 0 &&
+                startsTopLevelExport(i)
+            ) {
+                break;
+            }
+        }
+
+        return dtsText.slice(start, i).trim();
+    }
+
+    protected extractInterfaceBody(interfaceDecl: string): string {
+        const open = interfaceDecl.indexOf("{");
+        if (open === -1) {
+            throw new Error("Interface declaration is missing opening brace.");
+        }
+
+        let depth = 0;
+        for (let i = open; i < interfaceDecl.length; i++) {
+            const ch = interfaceDecl[i]!;
+            if (ch === "{") depth++;
+            else if (ch === "}") {
+                depth--;
+                if (depth === 0) {
+                    return interfaceDecl.slice(open + 1, i);
+                }
+            }
+        }
+
+        throw new Error("Interface declaration is missing closing brace.");
+    }
+
+    protected splitTopLevelStatements(body: string): string[] {
+        const parts: string[] = [];
+        let start = 0;
+
+        let braceDepth = 0;
+        let parenDepth = 0;
+        let bracketDepth = 0;
+        let angleDepth = 0;
+
+        let inString: '"' | "'" | "`" | null = null;
+        let inLineComment = false;
+        let inBlockComment = false;
+
+        for (let i = 0; i < body.length; i++) {
+            const ch = body[i]!;
+            const next = body[i + 1] || "";
+
+            if (inLineComment) {
+                if (ch === "\n") inLineComment = false;
+                continue;
+            }
+
+            if (inBlockComment) {
+                if (ch === "*" && next === "/") {
+                    inBlockComment = false;
+                    i++;
+                }
+                continue;
+            }
+
+            if (inString) {
+                if (ch === "\\" && next) {
+                    i++;
+                    continue;
+                }
+                if (ch === inString) inString = null;
+                continue;
+            }
+
+            if (ch === "/" && next === "/") {
+                inLineComment = true;
+                i++;
+                continue;
+            }
+
+            if (ch === "/" && next === "*") {
+                inBlockComment = true;
+                i++;
+                continue;
+            }
+
+            if (ch === '"' || ch === "'" || ch === "`") {
+                inString = ch as '"' | "'" | "`";
+                continue;
+            }
+
+            if (ch === "{") braceDepth++;
+            else if (ch === "}" && braceDepth > 0) braceDepth--;
+
+            else if (ch === "(") parenDepth++;
+            else if (ch === ")" && parenDepth > 0) parenDepth--;
+
+            else if (ch === "[") bracketDepth++;
+            else if (ch === "]" && bracketDepth > 0) bracketDepth--;
+
+            else if (ch === "<") angleDepth++;
+            else if (ch === ">" && angleDepth > 0) angleDepth--;
+
+            if (
+                ch === ";" &&
+                braceDepth === 0 &&
+                parenDepth === 0 &&
+                bracketDepth === 0 &&
+                angleDepth === 0
+            ) {
+                parts.push(body.slice(start, i).trim());
+                start = i + 1;
+            }
+        }
+
+        const tail = body.slice(start).trim();
+        if (tail) parts.push(tail);
+
+        return parts.filter(Boolean);
+    }
+
+    protected splitTopLevelByComma(text: string): string[] {
+        const parts: string[] = [];
+        let start = 0;
+
+        let braceDepth = 0;
+        let parenDepth = 0;
+        let bracketDepth = 0;
+        let angleDepth = 0;
+
+        let inString: '"' | "'" | "`" | null = null;
+        let inLineComment = false;
+        let inBlockComment = false;
+
+        for (let i = 0; i < text.length; i++) {
+            const ch = text[i]!;
+            const next = text[i + 1] || "";
+
+            if (inLineComment) {
+                if (ch === "\n") inLineComment = false;
+                continue;
+            }
+
+            if (inBlockComment) {
+                if (ch === "*" && next === "/") {
+                    inBlockComment = false;
+                    i++;
+                }
+                continue;
+            }
+
+            if (inString) {
+                if (ch === "\\" && next) {
+                    i++;
+                    continue;
+                }
+                if (ch === inString) inString = null;
+                continue;
+            }
+
+            if (ch === "/" && next === "/") {
+                inLineComment = true;
+                i++;
+                continue;
+            }
+
+            if (ch === "/" && next === "*") {
+                inBlockComment = true;
+                i++;
+                continue;
+            }
+
+            if (ch === '"' || ch === "'" || ch === "`") {
+                inString = ch as '"' | "'" | "`";
+                continue;
+            }
+
+            if (ch === "{") braceDepth++;
+            else if (ch === "}" && braceDepth > 0) braceDepth--;
+
+            else if (ch === "(") parenDepth++;
+            else if (ch === ")" && parenDepth > 0) parenDepth--;
+
+            else if (ch === "[") bracketDepth++;
+            else if (ch === "]" && bracketDepth > 0) bracketDepth--;
+
+            else if (ch === "<") angleDepth++;
+            else if (ch === ">" && angleDepth > 0) angleDepth--;
+
+            if (
+                ch === "," &&
+                braceDepth === 0 &&
+                parenDepth === 0 &&
+                bracketDepth === 0 &&
+                angleDepth === 0
+            ) {
+                parts.push(text.slice(start, i));
+                start = i + 1;
+            }
+        }
+
+        parts.push(text.slice(start));
+        return parts;
+    }
+
+    protected findTopLevelColon(text: string): number {
+        let braceDepth = 0;
+        let parenDepth = 0;
+        let bracketDepth = 0;
+        let angleDepth = 0;
+
+        let inString: '"' | "'" | "`" | null = null;
+        let inLineComment = false;
+        let inBlockComment = false;
+
+        for (let i = 0; i < text.length; i++) {
+            const ch = text[i]!;
+            const next = text[i + 1] || "";
+
+            if (inLineComment) {
+                if (ch === "\n") inLineComment = false;
+                continue;
+            }
+
+            if (inBlockComment) {
+                if (ch === "*" && next === "/") {
+                    inBlockComment = false;
+                    i++;
+                }
+                continue;
+            }
+
+            if (inString) {
+                if (ch === "\\" && next) {
+                    i++;
+                    continue;
+                }
+                if (ch === inString) inString = null;
+                continue;
+            }
+
+            if (ch === "/" && next === "/") {
+                inLineComment = true;
+                i++;
+                continue;
+            }
+
+            if (ch === "/" && next === "*") {
+                inBlockComment = true;
+                i++;
+                continue;
+            }
+
+            if (ch === '"' || ch === "'" || ch === "`") {
+                inString = ch as '"' | "'" | "`";
+                continue;
+            }
+
+            if (ch === "{") braceDepth++;
+            else if (ch === "}" && braceDepth > 0) braceDepth--;
+
+            else if (ch === "(") parenDepth++;
+            else if (ch === ")" && parenDepth > 0) parenDepth--;
+
+            else if (ch === "[") bracketDepth++;
+            else if (ch === "]" && bracketDepth > 0) bracketDepth--;
+
+            else if (ch === "<") angleDepth++;
+            else if (ch === ">" && angleDepth > 0) angleDepth--;
+
+            if (
+                ch === ":" &&
+                braceDepth === 0 &&
+                parenDepth === 0 &&
+                bracketDepth === 0 &&
+                angleDepth === 0
+            ) {
+                return i;
+            }
+        }
+
+        return -1;
+    }
+
+    protected findApiInterfaceName<TApi extends ScriptApiObject>(apiInstance: TApi, dtsText: string): string {
+        const ctorName = String((apiInstance as any)?.constructor?.name || "").trim();
+        const namespace = String((apiInstance as any)?.namespace || "").trim();
+
+        const toPascal = (value: string): string =>
+            value
+                .replace(/[^A-Za-z0-9]+/g, " ")
+                .split(" ")
+                .filter(Boolean)
+                .map(part => part.charAt(0).toUpperCase() + part.slice(1))
+                .join("");
+
+        const normalizeCtorBase = (value: string): string =>
+            value
+                .replace(/^XOpat/, "")
+                .replace(/ScriptApi$/, "");
+
+        const unique = (values: string[]): string[] => [...new Set(values.filter(Boolean))];
+
+        const ctorBase = normalizeCtorBase(ctorName);
+        const nsBase = toPascal(namespace);
+
+        const explicitCandidates = unique([
+            ctorBase ? `${ctorBase}ScriptApi` : "",
+            nsBase ? `${nsBase}ScriptApi` : "",
+
+            // Common read-only naming pattern:
+            // XOpatAnnotationsReadScriptApi -> AnnotationsScriptApi
+            ctorBase.endsWith("Read") ? `${ctorBase.slice(0, -4)}ScriptApi` : "",
+            nsBase.endsWith("Read") ? `${nsBase.slice(0, -4)}ScriptApi` : "",
+
+            // Optional symmetry if you ever have "FooWrite" namespace names.
+            ctorBase.endsWith("Write") ? `${ctorBase}ScriptApi` : "",
+            nsBase.endsWith("Write") ? `${nsBase}ScriptApi` : "",
+        ]);
+
+        for (const candidate of explicitCandidates) {
+            const escaped = candidate.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+            if (new RegExp(`export\\s+interface\\s+${escaped}\\b`).test(dtsText)) {
+                return candidate;
+            }
+        }
+
+        const prototype = Object.getPrototypeOf(apiInstance);
+        const runtimeMethods = new Set(
+            Object.getOwnPropertyNames(prototype).filter(name =>
+                name !== "constructor" &&
+                !name.startsWith("_") &&
+                typeof (apiInstance as any)[name] === "function"
+            )
+        );
+
+        const interfaceMatches = [
+            ...dtsText.matchAll(
+                /export\s+interface\s+([A-Za-z_]\w*)\s+extends\s+ScriptApiObject\s*\{([\s\S]*?)\n\}/gm
+            ),
+        ];
+
+        const scored = interfaceMatches
+            .map(match => {
+                const interfaceName = match[1]!;
+                const body = match[2] || "";
+                const methodNames = [
+                    ...body.matchAll(/(?:\/\*\*[\s\S]*?\*\/\s*)?([A-Za-z_]\w*)\s*\(([^)]*)\)\s*:\s*([^;]+);/g),
+                ].map(m => m[1]!);
+
+                const overlap = methodNames.filter(name => runtimeMethods.has(name)).length;
+                const missing = [...runtimeMethods].filter(name => !methodNames.includes(name)).length;
+
+                return {
+                    interfaceName,
+                    overlap,
+                    missing,
+                    methodCount: methodNames.length,
+                };
+            })
+            .filter(item => item.overlap > 0)
+            .sort((a, b) =>
+                b.overlap - a.overlap ||
+                a.missing - b.missing ||
+                b.methodCount - a.methodCount
+            );
+
+        if (scored.length === 1) {
+            return scored[0]!.interfaceName;
+        }
+
+        if (scored.length > 1 && scored[0]!.overlap > scored[1]!.overlap) {
+            return scored[0]!.interfaceName;
+        }
+
+        if (interfaceMatches.length === 1) {
+            return interfaceMatches[0]![1]!;
+        }
+
+        throw new Error(
+            `Could not infer API interface name for namespace '${namespace}'. ` +
+            `Tried: ${explicitCandidates.join(", ") || "(none)"}.`
+        );
     }
 
     protected extractDocSummary(doc: string): string {

@@ -194,6 +194,9 @@ class ChatModule extends XOpatModuleSingleton {
                 label: 'Default',
                 systemPrompt:`
 Be helpful and accurate. When the allowed scripting API can do the work, prefer using it silently instead of describing technical steps.
+Do not use scripting for greetings, thanks, or simple acknowledgements that do not require viewer inspection or action.
+Do not assume any previous script succeeded unless its result is explicitly present in the conversation.
+If the user asks who created, authored, or owns annotations, comments, or other viewer items, only answer if the available information identifies the current user. Otherwise state the limitation briefly instead of inferring.
 Do not talk about scripts, code blocks, namespaces, or execution unless the user explicitly asks for technical details.
 For non-technical users, keep language plain and outcome-focused.
 When scripting is not available or insufficient, explain the limitation clearly.`
@@ -205,8 +208,8 @@ When scripting is not available or insufficient, explain the limitation clearly.
     }
 
     _attachToLayout(): void {
-        if (this._layoutAttached || !window.LAYOUT) return;
-        window.LAYOUT.addTab({
+        if (this._layoutAttached) return;
+        (window as any).LAYOUT.addTab({
             id: 'chat',
             title: 'Chat',
             icon: 'fa-comments',

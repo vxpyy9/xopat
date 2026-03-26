@@ -40,10 +40,11 @@ module.exports = Object.freeze({
     //Relative Paths For the Viewer
     PROJECT_ROOT: PROJECT_ROOT,
     PROJECT_SOURCES: PROJECT_ROOT + 'src/',
-    EXTERNAL_SOURCES: this.PROJECT_SOURCES + 'external/',
-    LIBS_ROOT: this.PROJECT_SOURCES + 'libs/',
-    ASSETS_ROOT: this.PROJECT_SOURCES + 'assets/',
-    LOCALES_ROOT: this.PROJECT_SOURCES + 'locales/',
+    EXTERNAL_SOURCES: PROJECT_ROOT + 'src/external/',
+    LIBS_ROOT: PROJECT_ROOT + 'src/libs/',
+    ASSETS_ROOT: PROJECT_ROOT + 'src/assets/',
+    LOCALES_ROOT: PROJECT_ROOT + 'src/locales/',
+    SERVER_ROOT: PROJECT_ROOT + 'server/',
     MODULES_FOLDER: PROJECT_ROOT + 'modules/',
     PLUGINS_FOLDER: PROJECT_ROOT + 'plugins/',
 

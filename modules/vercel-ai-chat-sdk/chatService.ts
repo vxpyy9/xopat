@@ -275,24 +275,50 @@ export class ChatService {
 
     async uploadAttachment(options: {
         sessionId?: string | null;
-        file: File | Blob;
+        file?: File | Blob;
         name?: string;
         kind?: 'image' | 'file' | 'screenshot';
+        mimeType?: string;
+        dataBase64?: string;
         metadata?: Record<string, unknown>;
     }): Promise<ChatAttachmentRecord> {
         const sessionId = options.sessionId || this._activeSessionId;
         if (!sessionId) throw new Error('uploadAttachment requires an active session.');
 
-        const file = options.file;
-        const dataUrl = await this._blobToDataUrl(file);
-        const mimeType = (file as File).type || 'application/octet-stream';
+        const hasFile = !!options.file;
+        const hasInlineData = typeof options.dataBase64 === 'string' && options.dataBase64.trim().length > 0;
+
+        if (!hasFile && !hasInlineData) {
+            throw new Error('uploadAttachment requires either file or dataBase64.');
+        }
+
+        if (hasFile && hasInlineData) {
+            throw new Error('uploadAttachment accepts either file or dataBase64, not both.');
+        }
+
+        if (options.file) {
+            const file = options.file;
+            const dataUrl = await this._blobToDataUrl(file);
+            const mimeType = options.mimeType || (file as File).type || 'application/octet-stream';
+
+            return this._server().uploadAttachment!({
+                sessionId,
+                kind: options.kind || (mimeType.startsWith('image/') ? 'image' : 'file'),
+                name: options.name || (file as File).name || 'attachment',
+                mimeType,
+                dataBase64: dataUrl,
+                metadata: options.metadata,
+            });
+        }
+
+        const mimeType = options.mimeType || 'application/octet-stream';
 
         return this._server().uploadAttachment!({
             sessionId,
             kind: options.kind || (mimeType.startsWith('image/') ? 'image' : 'file'),
-            name: options.name || (file as File).name || 'attachment',
+            name: options.name || 'attachment',
             mimeType,
-            dataBase64: dataUrl,
+            dataBase64: String(options.dataBase64),
             metadata: options.metadata,
         });
     }

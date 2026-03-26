@@ -166,7 +166,8 @@ export const viewerMenuMethods = {
 
             requestAnimationFrame(() => {
                 this._renderPresetList(viewerId);
-                this._populateAuthorsList(viewerId);
+                // todo race condition, accesses canvas instance, still, this update is too slow and fired too often, fix it
+                //this._populateAuthorsList(viewerId);
                 if (state.currentTab === 'annot') state.boardPanel.mount();
                 this._updateViewerControls(viewerId);
             });
