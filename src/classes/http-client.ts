@@ -82,6 +82,10 @@ declare interface Window {
     XOPAT_CSRF_TOKEN?: string;
     HTTPError: typeof HTTPError;
     HttpClient: any;
+    XOpatSessionRecovery?: {
+        isReloading?: boolean;
+        handle?: (reason?: { status?: number; code?: string; message?: string; source?: string }) => boolean;
+    };
 }
 
 /**
@@ -201,6 +205,43 @@ export class HttpClient {
         return status === 429 || (status >= 500 && status < 600);
     }
 
+    private _parseErrorPayload(textData?: string): { code?: string; error?: string; message?: string; details?: any } | null {
+        if (!textData) return null;
+        try {
+            const parsed = JSON.parse(textData);
+            return parsed && typeof parsed === "object" ? parsed : null;
+        } catch (_) {
+            return null;
+        }
+    }
+
+    private _tryHandleSessionExpiry(status: number, textData?: string): boolean {
+        if (!this.usingProxy) return false;
+
+        const payload = this._parseErrorPayload(textData);
+        const code = payload?.code;
+        const message = String(payload?.error || payload?.message || textData || "");
+        const isSessionError =
+            code === "RPC_NO_SESSION" ||
+            code === "RPC_BAD_CSRF" ||
+            (status === 401 && /missing or invalid session/i.test(message)) ||
+            (status === 403 && /invalid csrf token/i.test(message));
+
+        if (!isSessionError) return false;
+
+        try {
+            return !!(window as any).XOpatSessionRecovery?.handle?.({
+                status,
+                code,
+                message,
+                source: "proxy",
+            });
+        } catch (e) {
+            console.warn("HttpClient: session recovery handler failed.", e);
+            return false;
+        }
+    }
+
     private _delay(ms: number): Promise<void> {
         return new Promise(r => setTimeout(r, ms));
     }
@@ -261,6 +302,12 @@ export class HttpClient {
                 clearTimeout(to);
 
                 if (!res.ok) {
+                    const text = await res.text().catch(() => "");
+
+                    if (this._tryHandleSessionExpiry(res.status, text)) {
+                        throw new HTTPError(`HTTP ${method} ${url} failed: ${res.status}`, res, text);
+                    }
+
                     if (res.status === 401 && this.auth.refreshOn401 && !refreshed) {
                         refreshed = await this._maybeRefreshSecrets();
                         if (refreshed) {
@@ -276,7 +323,6 @@ export class HttpClient {
                         continue;
                     }
 
-                    const text = await res.text().catch(() => "");
                     throw new HTTPError(`HTTP ${method} ${url} failed: ${res.status}`, res, text);
                 }
 

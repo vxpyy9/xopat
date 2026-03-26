@@ -18,6 +18,7 @@
       "defaultDemoHtml": "<ul class=\"ml-3\"><li>you have an invalid link, or</li><li>the session has been lost - please, report the issue.</li></ul>",
       "invalidDataHtml": "<ul class=\"ml-3\"><li>you have an invalid link, or</li><li>the data you are trying to view does not exist, or</li><li>you are not authorized to view the data</li></ul>",
       "macroImage": "The image {{image}} you are trying to view is a macro image. No magnification scales are available.",
+      "sessionExpiredReloading": "Your session expired or became invalid. Reloading…",
       "slide": {
         "404": "The data you are trying to open does not exist!",
         "401": "Your login session has expired: please refresh the window to log in.",

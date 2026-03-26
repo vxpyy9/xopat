@@ -129,16 +129,6 @@ class XopatServerRuntime {
         return items;
     }
 
-    getClientBootstrap() {
-        return `
-<script src="/server/client-rpc.js"></script>
-<script>
-window.xserver = window.xserver || XOpatServerRPC.createClient({
-  getViewerId: () => window.VIEWER?.id || undefined
-});
-</script>`;
-    }
-
     getClientRuntimeSource() {
         return `
 (function(global){
@@ -175,6 +165,30 @@ window.xserver = window.xserver || XOpatServerRPC.createClient({
     return err;
   }
 
+  function tryNotifySessionExpiry(err) {
+    var status = err && (err.status || err.statusCode);
+    var code = err && err.code;
+    var message = String((err && err.message) || "");
+    var isSessionError =
+      code === "RPC_NO_SESSION" ||
+      code === "RPC_BAD_CSRF" ||
+      (status === 401 && /missing or invalid session/i.test(message)) ||
+      (status === 403 && /invalid csrf token/i.test(message));
+
+    if (!isSessionError) return false;
+
+    try {
+      return !!global.XOpatSessionRecovery?.handle?.({
+        status: status,
+        code: code,
+        message: message,
+        source: "rpc"
+      });
+    } catch (_) {
+      return false;
+    }
+  }
+
   function makeScope(kind, id, opts) {
     return new Proxy({}, {
       get: function(_, method) {
@@ -207,7 +221,9 @@ window.xserver = window.xserver || XOpatServerRPC.createClient({
             );
             return data && typeof data === "object" && "result" in data ? data.result : data;
           } catch (err) {
-            throw normalizeRpcError(err);
+            var normalized = normalizeRpcError(err);
+            tryNotifySessionExpiry(normalized);
+            throw normalized;
           }
         };
       }

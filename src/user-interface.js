@@ -990,4 +990,28 @@ ${label}
     });
     // todo better way, some layout api
     USER_INTERFACE.Status.attachTo(document.getElementById('osd'));
+    // todo: maybe allow contextual override (based on http client)
+    window.XOpatSessionRecovery = {
+        isReloading: false,
+        // (_reason?: { status?: number; code?: string; message?: string; source?: string })
+        handle: (_reason) => {
+            if (this.isReloading) return true;
+            this.isReloading = true;
+
+            try { USER_INTERFACE.Loading.show(false); } catch (_) { }
+
+            // todo maybe do not force reload, make it optional?
+            const reload = () => {
+                try { window.location.reload(); } catch (_) { window.location.href = window.location.href; }
+            };
+
+            Dialogs.show($.t('error.sessionExpiredReloading'), 20000, Dialogs.MSG_ERR, {
+                queued: false,
+                onHide: reload,
+            });
+
+            window.setTimeout(reload, 2600);
+            return true;
+        }
+    };
 }
