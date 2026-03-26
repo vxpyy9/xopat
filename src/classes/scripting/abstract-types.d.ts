@@ -102,6 +102,14 @@ export type DtypesSource =
     | { kind: "text"; value: string }
     | { kind: "resolve"; value: () => string | Promise<string> };
 
+export type ExternalScriptApiRegistrar<TNamespaces extends ScriptApiNamespaces = ScriptApiNamespaces> =
+    (manager: ScriptingManager<TNamespaces>) => void | Promise<void>;
+
+export type ExternalScriptApiRegistration<TNamespaces extends ScriptApiNamespaces = ScriptApiNamespaces> = {
+    registrar: ExternalScriptApiRegistrar<TNamespaces>;
+    label?: string;
+};
+
 /**
  * You can provide types manually via the following metadata properties.
  * Optionally, you can define a *.d.ts typescript definition for your API
@@ -136,8 +144,13 @@ export interface ScriptApiMetadata<TApi extends ScriptApiObject = ScriptApiObjec
 
 export interface ScriptManagerStatic<TNamespaces extends ScriptApiNamespaces = ScriptApiNamespaces> {
     __self: ScriptingManager<TNamespaces> | undefined;
+    __externalApiRegistrations?: Array<ExternalScriptApiRegistration<TNamespaces>>;
     instance(viewerActions?: ViewerActionMap<TNamespaces>, apiTimeout?: number): ScriptingManager<TNamespaces>;
     instantiated(): boolean;
+    registerExternalApi(
+        registrar: ExternalScriptApiRegistrar<TNamespaces>,
+        options?: { label?: string }
+    ): Promise<void> | void;
 }
 
 export type ScriptNamespaceConsentEntry = {

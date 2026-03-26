@@ -11,7 +11,6 @@ import { HttpClient } from "./classes/http-client";
 import { initXOpatLoader } from "./loader";
 import { InvertedWeakMap } from "./external/data-structures";
 import { ScriptingManager } from "./classes/scripting-manager";
-import {BaseComponent} from "../ui/classes/baseComponent.d.ts";
 
 // Functions defined in runtime-loaded scripts — declared here for type-check only (todo retype files to TS, replace with imports)
 declare function initXOpatUI(): void;
@@ -1174,6 +1173,8 @@ export function initXOpat(PLUGINS: Record<string, XOpatElementItem>, MODULES: Re
                                                                     background: BackgroundItem[] | BackgroundConfig[] | undefined,
                                                                     visualizations: VisualizationItem[] | undefined = undefined) {
         try {
+            await APPLICATION_CONTEXT.Scripting.initialize();
+
             initXOpatLayers();
 
             // First step: load plugins that were marked as to be loaded but were not yet loaded
@@ -1202,8 +1203,6 @@ export function initXOpat(PLUGINS: Record<string, XOpatElementItem>, MODULES: Re
                     }
                 }
             }
-
-            await APPLICATION_CONTEXT.Scripting.ready;
 
             /*---------------------------------------------------------*/
             /*------------ Initialization of UI -----------------------*/

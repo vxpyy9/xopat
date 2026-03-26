@@ -338,7 +338,7 @@ First, get familiar with (sorted in importance order):
  - ``window.HTTPClient`` for seamless auth integration
  - Third party code (see below)    
  - `window.UIComponents`
-    - building blocks for HTML structures, does not have to be used but contains ready-to-use building blocks - menus...
+    - building blocks for HTML structures, deprecated
  - `window.APPLICATION_CONTEXT`
     - note that this interface is meant for inner logic and you probably do not need to access it
     - to access the configuration, should be used in read-only manner: `APPLICATION_CONTEXT.config`

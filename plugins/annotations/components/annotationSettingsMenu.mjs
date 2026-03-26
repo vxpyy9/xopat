@@ -39,7 +39,7 @@ export const createAnnotationSettingsMenu = (plugin) => {
                     }, format);
                 })
             ),
-            // Dynamic Convertor Options
+            // Dynamic Convertor Options TODO: support instead UI.Components
             div({
                 class: "bg-base-200 p-2 rounded-lg text-sm",
                 innerHTML: () => Object.values(getConvertor().options)

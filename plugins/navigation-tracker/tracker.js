@@ -31,7 +31,7 @@ addPlugin("nav-tracker", class extends XOpatPlugin {
 
         canvas.style.width = "100%";
         canvas.style.height = "100%";
-        canvas.style.opacity = "0.6";
+        canvas.style.opacity = "0.45";
 
         state = this._states[key] = {
             key,
@@ -105,12 +105,12 @@ addPlugin("nav-tracker", class extends XOpatPlugin {
                 element: state.canvas,
                 enterHandler: e => {
                     if (e?.originalEvent?.target?.style) {
-                        e.originalEvent.target.style.opacity = "0.35";
+                        e.originalEvent.target.style.opacity = "0.15";
                     }
                 },
                 leaveHandler: e => {
                     if (e?.originalEvent?.target?.style) {
-                        e.originalEvent.target.style.opacity = "1.0";
+                        e.originalEvent.target.style.opacity = "0.45";
                     }
                 },
             });

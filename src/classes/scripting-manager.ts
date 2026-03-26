@@ -1,6 +1,6 @@
 import type {
     AllowedScriptApiManifest, AnyFn, ApiCallMessage, ApiResponseMessage,
-    MethodKeys, NamespaceSchema, NamespacesState, ParsedDts, ScriptApiMetadata,
+    ExternalScriptApiRegistration, MethodKeys, NamespaceSchema, NamespacesState, ParsedDts, ScriptApiMetadata,
     ScriptApiNamespaces, ScriptApiObject, ScriptManagerStatic, ScriptNamespaceConsentEntry,
     ViewerActionMap, WorkerInitMessage, WorkerRecord
 } from "./scripting/abstract-types";
@@ -13,19 +13,48 @@ export class ScriptingManager<
     TNamespaces extends ScriptApiNamespaces = ScriptApiNamespaces
 > {
     static __self: ScriptingManager<any> | undefined = undefined;
+    static __externalApiRegistrations?: Array<ExternalScriptApiRegistration<any>> = [];
+
+    static XOpatScriptingApi: typeof XOpatScriptingApi;
 
     workers: Record<string, WorkerRecord>;
     viewerActions: ViewerActionMap<TNamespaces>;
     apiTimeout: number;
     namespaces: NamespacesState<TNamespaces>;
-    ready: Promise<void>;
+    protected ready: Promise<void> | undefined;
+    protected _bootstrapClosed: boolean;
+    protected _initializing: boolean;
+    protected _processedExternalRegistrations: Set<ExternalScriptApiRegistration<TNamespaces>>;
 
     static instance(): ScriptingManager<any> {
         return this.__self || new this();
     }
 
+    static instantiated(): boolean {
+        return !!this.__self;
+    }
+
+    static registerExternalApi(
+        registrar: ExternalScriptApiRegistration<any>["registrar"],
+        options: { label?: string } = {}
+    ): Promise<void> | void {
+        const staticContext = this as ScriptManagerStatic<any>;
+        const registration: ExternalScriptApiRegistration<any> = {
+            registrar,
+            label: options.label,
+        };
+
+        staticContext.__externalApiRegistrations ||= [];
+        staticContext.__externalApiRegistrations.push(registration);
+
+        const instance = staticContext.__self;
+        if (!instance) return;
+
+        return instance._registerExternalApiRegistration(registration);
+    }
+
     constructor(viewerActions: ViewerActionMap<TNamespaces> = {}, apiTimeout = 30000) {
-        const staticContext = this.constructor as ScriptManagerStatic<TNamespaces>;
+        const staticContext = this.constructor as unknown as ScriptManagerStatic<TNamespaces>;
         if (staticContext.__self) {
             throw `Trying to instantiate a singleton. Instead, use ${(this.constructor as typeof ScriptingManager).name}.instance().`;
         }
@@ -35,14 +64,73 @@ export class ScriptingManager<
         this.viewerActions = viewerActions;
         this.apiTimeout = apiTimeout;
         this.namespaces = {} as NamespacesState<TNamespaces>;
-
-        // todo: consider support for external ingestion
-        this.ready = this.initializeBuiltins();
+        this._bootstrapClosed = false;
+        this._initializing = false;
+        this._processedExternalRegistrations = new Set();
+        this.ready = undefined;
     }
 
-    protected async initializeBuiltins(): Promise<void> {
-        await this.ingestApi(new XOpatApplicationScriptApi("application"));
-        await this.ingestApi(new XOpatViewerScriptApi("viewer"));
+    async initialize(): Promise<void> {
+        if (this._initializing) {
+            await this.ready;
+            return;
+        }
+        if (this.ready) return;
+        await this._initializeBuiltins();
+    }
+
+    private async _initializeBuiltins(): Promise<void> {
+        this._initializing = true;
+        try {
+            await this.ingestApi(new XOpatApplicationScriptApi("application"));
+            await this.ingestApi(new XOpatViewerScriptApi("viewer"));
+
+            const staticContext = this.constructor as unknown as ScriptManagerStatic<TNamespaces>;
+            const externalRegistrations = [...(staticContext.__externalApiRegistrations || [])];
+            for (const registration of externalRegistrations) {
+                await this._ingestExternalRegistration(registration);
+            }
+        } finally {
+            this._initializing = false;
+            this._bootstrapClosed = true;
+        }
+    }
+
+    protected _registerExternalApiRegistration(
+        registration: ExternalScriptApiRegistration<TNamespaces>
+    ): Promise<void> | void {
+        if (!this._bootstrapClosed) {
+            this.ready = this.ready.then(async () => {
+                await this._ingestExternalRegistration(registration);
+            });
+            return this.ready;
+        }
+
+        const workerCount = Object.keys(this.workers).length;
+        const lateNote = workerCount > 0
+            ? ` ${workerCount} worker(s) already exist, so they will not see the new namespace.`
+            : "";
+
+        console.warn(
+            `[ScriptingManager] External scripting API '${registration.label || "unknown"}' was registered after the bootstrap phase finished.` +
+            ` Register external APIs before ScriptingManager.instance() or before awaiting manager.ready.${lateNote}`
+        );
+
+        return this._ingestExternalRegistration(registration);
+    }
+
+    protected async _ingestExternalRegistration(
+        registration: ExternalScriptApiRegistration<TNamespaces>
+    ): Promise<void> {
+        if (this._processedExternalRegistrations.has(registration)) return;
+
+        this._processedExternalRegistrations.add(registration);
+        try {
+            await registration.registrar(this);
+        } catch (e) {
+            this._processedExternalRegistrations.delete(registration);
+            throw e;
+        }
     }
 
     async ingestApi<TApi extends XOpatScriptingApi>(apiInstance: TApi): Promise<void> {
@@ -57,7 +145,7 @@ export class ScriptingManager<
             __self__: true,
             name: apiInstance.name,
             description: apiInstance.description,
-        };
+        } as NamespaceSchema<TApi>;
 
         const ctor = (apiInstance as any).constructor;
         const metadata: ScriptApiMetadata<TApi> | undefined = ctor?.ScriptApiMetadata;
@@ -179,7 +267,7 @@ export class ScriptingManager<
         const stripped = ctorName.replace(/^XOpat/, "").replace(/ScriptApi$/, "ScriptApi");
 
         // e.g. XOpatApplicationScriptApi -> ApplicationScriptApi
-        const guess = stripped || `${apiInstance.namespace[0].toUpperCase()}${apiInstance.namespace.slice(1)}ScriptApi`;
+        const guess = stripped || `${apiInstance.namespace[0]!.toUpperCase()}${apiInstance.namespace.slice(1)}ScriptApi`;
 
         if (new RegExp(`export\\s+interface\\s+${guess}\\b`).test(dtsText)) {
             return guess;
@@ -187,7 +275,7 @@ export class ScriptingManager<
 
         const matches = [...dtsText.matchAll(/export\s+interface\s+([A-Za-z_]\w*)\s+extends\s+ScriptApiObject/g)];
         if (matches.length === 1) {
-            return matches[0][1]!;
+            return matches[0]![1]!;
         }
 
         throw new Error(
@@ -245,7 +333,11 @@ export class ScriptingManager<
         const params: Array<{ name: string; type: string }> = [];
         let match: RegExpExecArray | null;
         while ((match = paramsRegex.exec(doc)) !== null) {
-            params.push({ name: match[2], type: match[1] });
+            try {
+                params.push({ name: match![2]!, type: match![1]! });
+            } catch (e) {
+                console.error("Failed to parse param from doc:", match, e);
+            }
         }
         return params;
     }
@@ -546,6 +638,11 @@ self.addEventListener("message", initHandler);
                 continue;
             }
 
+            if (!ns.match(/[a-zA-Z0-9][a-zA-Z0-9_]*/)) {
+                console.error(`[Syntax] Cannot use namespace '${ns}' - it must be a valid javascript variable name token.`);
+                continue;
+            }
+
             workerCode += `const _ns_${ns} = {};\n`;
             const methods = this.namespaces[ns];
             const isNamespaceAllowed = methods?.["__self__"];
@@ -666,3 +763,6 @@ self.addEventListener("message", initHandler);
         this.namespaces[namespace]["__self__"] = value;
     }
 }
+
+ScriptingManager.XOpatScriptingApi = XOpatScriptingApi;
+(window as any).ScriptingManager = ScriptingManager;

@@ -332,7 +332,6 @@ export class ShaderLayer extends BaseComponent {
 
         const blendDisabled = this._isModeShow() || this.fixed;
 
-        console.log("fixed", this.fixed, "blendDisabled", blendDisabled);
         return div(
             {
                 id: this.id + "-blend-controls",

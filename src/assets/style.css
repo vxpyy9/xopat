@@ -521,6 +521,14 @@ input.selectable-image-row-context:checked + div {
 /**************************************************************
 **************** GLOBAL RULES *********************************
 ***************************************************************/
+:root:has(:is(.modal-open, .modal:target, .modal-toggle:checked + .modal, .modal[open])) {
+    overflow: hidden;
+    scrollbar-gutter: auto;
+}
+:root:has(:is(.modal-open, .\!modal:target, .modal-toggle:checked + .\!modal, .\!modal[open])) {
+    overflow: hidden !important;
+    scrollbar-gutter: auto !important;
+}
 .svg-bg {fill: var(--fallback-b1,oklch(var(--b1)/var(--tw-bg-opacity, 1)));}
 .svg-fg {fill: var(--fallback-bc,oklch(var(--bc)/1));}
 .stretch-grid__item {
