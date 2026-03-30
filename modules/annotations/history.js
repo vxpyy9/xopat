@@ -769,8 +769,13 @@ ${editIcon}
             }
             if (toRemove) {
                 canvas.remove(toRemove);
-                const wasSelected = this.canvas.getActiveObject() === toRemove;
-                if (wasSelected) this.raiseEvent('annotation-deselected', {object: toRemove});
+                try {
+                    debugger;
+                    const wasSelected = this._context.canvas.getActiveObject() === toRemove;
+                    if (wasSelected) this.raiseEvent('annotation-deselected', {object: toRemove});
+                } catch (e) {
+                    console.warn('History swapping annotation - exception on deselection.', e);
+                }
                 this._context.raiseEvent('annotation-delete', {object: toRemove});
             }
             canvas.setActiveObject(toAdd);
@@ -782,8 +787,13 @@ ${editIcon}
             }
             canvas.remove(toRemove);
             this._removeFromBoard(toRemove);
-            const wasSelected = this.canvas.getActiveObject() === toRemove;
-            if (wasSelected) this.raiseEvent('annotation-deselected', {object: toRemove});
+            try {
+                debugger;
+                const wasSelected = this._context.canvas.getActiveObject() === toRemove;
+                if (wasSelected) this.raiseEvent('annotation-deselected', {object: toRemove});
+            } catch (e) {
+                console.warn('History removing annotation - exception on deselection.', e);
+            }
             this._context.raiseEvent('annotation-delete', {object: toRemove});
         }
         canvas.renderAll();
