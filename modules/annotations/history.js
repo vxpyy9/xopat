@@ -770,7 +770,6 @@ ${editIcon}
             if (toRemove) {
                 canvas.remove(toRemove);
                 try {
-                    debugger;
                     const wasSelected = this._context.canvas.getActiveObject() === toRemove;
                     if (wasSelected) this.raiseEvent('annotation-deselected', {object: toRemove});
                 } catch (e) {
@@ -788,7 +787,6 @@ ${editIcon}
             canvas.remove(toRemove);
             this._removeFromBoard(toRemove);
             try {
-                debugger;
                 const wasSelected = this._context.canvas.getActiveObject() === toRemove;
                 if (wasSelected) this.raiseEvent('annotation-deselected', {object: toRemove});
             } catch (e) {
