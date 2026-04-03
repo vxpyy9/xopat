@@ -341,6 +341,7 @@ OSDAnnotations.FabricWrapper = class extends XOpatViewerSingleton {
                 })
             ),
             {
+                name: 'Load annotations',
                 type: "annotations.loadObjects",
                 viewerId: this.viewer?.uniqueId,
                 clear,
@@ -481,6 +482,7 @@ OSDAnnotations.FabricWrapper = class extends XOpatViewerSingleton {
                 return true;
             }),
             {
+                name: 'Import annotations',
                 type: 'annotations.import',
                 viewerId: this.viewer?.uniqueId,
                 clear,
@@ -847,7 +849,8 @@ OSDAnnotations.FabricWrapper = class extends XOpatViewerSingleton {
             () => {
                 layerData = this._serializeLayer(id);
                 this._deleteLayer(id);
-            }
+            },
+            { name: 'Create layer' }
         );
     }
 
@@ -860,7 +863,8 @@ OSDAnnotations.FabricWrapper = class extends XOpatViewerSingleton {
 
         return APPLICATION_CONTEXT.history.push(
             () => this._deleteLayer(id),
-            () => this._createLayer(layerData)
+            () => this._createLayer(layerData),
+            { name: 'Delete layer' }
         );
     }
 
@@ -992,7 +996,8 @@ OSDAnnotations.FabricWrapper = class extends XOpatViewerSingleton {
 
         APPLICATION_CONTEXT.history.push(
             () => targetAnnots.forEach(annot => this._deleteAnnotation(annot, _raise)),
-            () => targetAnnots.forEach(annot => this._addAnnotation(annot, _raise))
+            () => targetAnnots.forEach(annot => this._addAnnotation(annot, _raise)),
+            { name: 'Delete annotation' }
         )
 
         return true;
@@ -1332,7 +1337,8 @@ OSDAnnotations.FabricWrapper = class extends XOpatViewerSingleton {
         if (cancelFlag) return false;
         return APPLICATION_CONTEXT.history.push(
             () => this._promoteHelperAnnotation(annotation, _raise, _dangerousSkipHistory),
-            () => this._deleteAnnotation(annotation, _raise)
+            () => this._deleteAnnotation(annotation, _raise),
+            { name: 'Create annotation' }
         );
     }
 
@@ -1457,7 +1463,8 @@ OSDAnnotations.FabricWrapper = class extends XOpatViewerSingleton {
 
         return APPLICATION_CONTEXT.history.push(
             () => this._setLayerVisibility(layer, after, _raise),
-            () => this._setLayerVisibility(layer, before, _raise)
+            () => this._setLayerVisibility(layer, before, _raise),
+            { name: 'Toggle layer visibility' }
         );
     }
 
@@ -1660,7 +1667,8 @@ OSDAnnotations.FabricWrapper = class extends XOpatViewerSingleton {
     addAnnotation(annotation, _raise=true) {
         return APPLICATION_CONTEXT.history.push(
             () => this._addAnnotation(annotation, _raise),
-            () => this._deleteAnnotation(annotation, _raise)
+            () => this._deleteAnnotation(annotation, _raise),
+            { name: 'Add annotation' }
         );
     }
 
@@ -1715,6 +1723,7 @@ OSDAnnotations.FabricWrapper = class extends XOpatViewerSingleton {
         return APPLICATION_CONTEXT.history.push(
             () => this._deleteAnnotation(annotation, _raise),
             () => this._addAnnotation(annotation, _raise),
+            { name: 'Delete annotation' }
         );
     }
 
@@ -1856,7 +1865,8 @@ OSDAnnotations.FabricWrapper = class extends XOpatViewerSingleton {
 
         return APPLICATION_CONTEXT.history.push(
             () => this._replaceAnnotation(previous, next, true),
-            () => this._replaceAnnotation(next, previous, true)
+            () => this._replaceAnnotation(next, previous, true),
+            { name: 'Edit annotation' }
         );
     }
 
@@ -2142,7 +2152,8 @@ OSDAnnotations.FabricWrapper = class extends XOpatViewerSingleton {
                         this._createLayer?.(item.data);
                     }
                 }
-            }
+            },
+            { name: 'Delete selection' }
         );
     }
 

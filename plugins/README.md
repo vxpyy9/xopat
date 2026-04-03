@@ -279,26 +279,23 @@ if (APPLICATION_CONTEXT.getOption("isStaticPreview")) {
 }
 ```
 
-### Data Management Options  TODO: rewrite
-There are generally **five** different options how to manage data. For metadata (e.g. configurations, settings), 
+### Data Management Options
+There are generally **five** different ways to manage data. For metadata (e.g., configurations, settings), 
 three different options are available:
 
-TODO docs
- 1. ``getOption``, `setOption` suitable for small configuration metadata, present in the configuration present in _viewer URL and file exports_
- 2. ``getStaticMeta``, ``-nothing-`` suitable for static (hardcoded) configuration metadata, reading from your `include.json`
- 3. `async getCache`, `async setCache` suitable for session-independent data (cookies or user data), always available
-    - use for user configurations caching to avoid re-setting in each session
+ 1. `getOption`, `setOption` suitable for small configuration metadata, present in the configuration of _viewer URL and file exports_.
+ 2. `getStaticMeta` suitable for static (hardcoded) configuration metadata, reading from your `include.json`.
+ 3. `async getCache`, `async setCache` suitable for session-independent data (cookies or user data), always available.
+    - use for user configurations caching to avoid re-setting in each session.
 
-And one global meta store meant for reading only, global viewer metadata    
- 4. ``APPLICATION_CONTEXT.metadata`` as an instance of `MetaStore` class  
-todo docs
-For data IO, you ahve two options
- 1. ``async importData``, `async exportData` suitable for data in general, present in _viewer file exports_
- 2. custom service storing data at server
-    - this is not supported as of now in any way, implement your own logic on how to access a third party storage service
-    - prefer use of ``sendJSON`` method to communicate, the user info metadata is automatically included
-    
+And one global meta store meant for reading only global viewer metadata:
+ 4. `APPLICATION_CONTEXT.metadata` as an instance of `MetaStore` class.
 
+For data IO, you have two options:
+ 1. `async importData`, `async exportData` suitable for data in general, present in _viewer file exports_.
+ 2. Custom service storing data at server
+    - this requires your own implementation to access a third party storage service.
+    - prefer the use of the `HttpClient` class to communicate, as it automatically integrates with the authentication system.
 
 ### Events
 Modules (and plugins) can have their own event system - in that case, the `EVENTS.md` description

@@ -146,7 +146,20 @@ interface HistoryProvider {
 }
 
 // ── XOpatHistory ─────────────────────────────────────────────────────────────
-type HistoryMeta = Record<string, any>;
+/**
+ * Metadata stored alongside a history entry.
+ * @property name  Human-readable label shown in the UI, e.g. "Create annotation".
+ *   The app bar renders this as "Undo {{name}}" / "Redo {{name}}".
+ * @property type  Optional machine-readable action identifier (e.g. "annotations.import").
+ *   Useful for programmatic history inspection or analytics.
+ */
+interface HistoryEntryMeta {
+    /** Human-readable label displayed in "Undo {{name}}" / "Redo {{name}}" UI. */
+    name?: string;
+    /** Machine-readable action identifier, e.g. "annotations.import". */
+    type?: string;
+    [key: string]: any;
+}
 
 interface HistoryProviderConstructor {
     new(): HistoryProvider;
@@ -167,7 +180,7 @@ interface XOpatHistoryConstructor {
 
 interface XOpatHistory extends OpenSeadragon.EventSource {
     BUFFER_LENGTH: number;
-    _buffer: Array<{ forward: () => any; backward: () => any; meta?: HistoryMeta } | null>;
+    _buffer: Array<{ forward: () => any; backward: () => any; meta?: HistoryEntryMeta } | null>;
     _buffidx: number;
     _lastValidIndex: number;
     _providers: HistoryProvider[];
@@ -185,6 +198,11 @@ interface XOpatHistory extends OpenSeadragon.EventSource {
     hasStackRedo(): boolean;
     hasAnyStackHistory(): boolean;
 
+    /** Returns the meta of the entry that would be undone next, or undefined. */
+    currentUndoMeta(): HistoryEntryMeta | undefined;
+    /** Returns the meta of the entry that would be redone next, or undefined. */
+    currentRedoMeta(): HistoryEntryMeta | undefined;
+
     clear(options?: {
         resetProviders?: boolean;
         reason?: string;
@@ -194,13 +212,13 @@ interface XOpatHistory extends OpenSeadragon.EventSource {
     push(
         forward: () => any,
         backward: () => any,
-        meta?: HistoryMeta
+        meta?: HistoryEntryMeta
     ): Promise<any>;
 
     pushExecuted(
         forward: () => any,
         backward: () => any,
-        meta?: HistoryMeta
+        meta?: HistoryEntryMeta
     ): Promise<void>;
 
     readonly isRecordingEnabled: boolean;

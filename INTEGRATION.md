@@ -146,7 +146,7 @@ Example for ``DeepZoom`` protocol configuration:
 This will leverage build-in OpenSeadragon protocol support.
 
 ### Custom Authentication
-TODO add support for HTTP-Client usage
+For configuring and implementing custom authentication, the viewer relies on `XOpatUser` and the `HttpClient` service, alongside a proxy setup (optional). See [Authentication and Proxy Setup](src/AUTHORIZATION_AND_PROXY_AND_USERS.md) for detailed descriptions.
 
 ### Security Considerations
 The viewer can turn on ``secure`` mode, which will disable all
@@ -219,8 +219,7 @@ async getLabel() {
 }
 ````
 
-# FIXME update docs
- 
+
 ### Custom Synchronous And Asynchronous Protocols
 We prefer for the visualization data to come in synchronous requests due to scalability.
 It is a fact that most image servers do not support queries for multiple images at once;
@@ -425,7 +424,7 @@ support all versions, you have to correctly define how your data
 is loaded as a texture to the GPU.
 
 This is done by implementing target _convertors_ or ensuring the viewer has support for
-your data type. FIXME: allow custom types in the drawer, support custom data for textures.
+your data type (support for custom data-to-texture loaders is planned).
 
 Doing so will enable you to use ANY (raster) data in the viewer, e.g.,
 reading from a zip file.

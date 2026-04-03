@@ -14,6 +14,19 @@ function llmLog(label: string, data: any) {
     }
 }
 
+function readPositiveEnvInt(name: string, fallback: number): number {
+    const raw = Number((globalThis as any)?.process?.env?.[name]);
+    return Number.isFinite(raw) && raw > 0 ? Math.floor(raw) : fallback;
+}
+
+const CHAT_SEND_TURN_TIMEOUT_MS = Math.max(
+    60_000,
+    readPositiveEnvInt(
+        'XOPAT_CHAT_TURN_TIMEOUT_MS',
+        readPositiveEnvInt('XOPAT_CHAT_SENDTURN_TIMEOUT_MS', 180_000)
+    )
+);
+
 export const policy = {
     ensureModelCapabilities: {
         auth: { public: false, requireSession: true },
@@ -82,7 +95,7 @@ export const policy = {
     sendTurn: {
         auth: { public: false, requireSession: true },
         runtime: {
-            timeoutMs: 60_000,
+            timeoutMs: CHAT_SEND_TURN_TIMEOUT_MS,
             maxBodyBytes: 512 * 1024,
             maxConcurrency: 5,
             queueLimit: 25,
@@ -442,12 +455,9 @@ function coerceMessageText(message: ChatMessage | null | undefined): string {
 }
 
 function normalizeIncomingMessage(message: ChatMessage): ChatMessage {
-    const normalizedRole = message.role === 'tool' ? 'user' : message.role;
-
     if (message.parts?.length) {
         return {
             ...message,
-            role: normalizedRole,
             content: message.content || coerceMessageText(message),
             createdAt: message.createdAt || new Date().toISOString(),
         };
@@ -455,14 +465,12 @@ function normalizeIncomingMessage(message: ChatMessage): ChatMessage {
     if (typeof message.content === 'string') {
         return {
             ...message,
-            role: normalizedRole,
             parts: [{ type: 'text', text: message.content }],
             createdAt: message.createdAt || new Date().toISOString(),
         };
     }
     return {
         ...message,
-        role: normalizedRole,
         parts: [],
         content: '',
         createdAt: message.createdAt || new Date().toISOString(),
@@ -922,7 +930,14 @@ export async function getSession(_ctx: any, input: { sessionId: string; hydrateM
 }
 
 export async function renameSession(_ctx: any, input: { sessionId: string; title: string }): Promise<ChatSession> {
-    return getRegistry().getSessionStore().updateSession(input.sessionId, { title: input.title });
+    const hydrated = await getRegistry().hydrateSession(input.sessionId);
+    return getRegistry().getSessionStore().updateSession(input.sessionId, {
+        title: input.title,
+        metadata: {
+            ...(hydrated.session.metadata || {}),
+            manualTitle: true,
+        },
+    });
 }
 
 export async function deleteSession(_ctx: any, input: { sessionId: string }): Promise<{ ok: true }> {
@@ -955,9 +970,18 @@ export async function uploadAttachment(_ctx: any, input: {
 export async function appendMessages(_ctx: any, input: { sessionId: string; messages: ChatMessage[] }): Promise<{ messages: ChatMessage[] }> {
     const messages = input.messages.map(normalizeIncomingMessage);
     const appended = await getRegistry().getSessionStore().appendMessages(input.sessionId, messages);
-    const all = await getRegistry().getSessionStore().listMessages(input.sessionId);
-    const title = summarizeForTitle(all);
-    await getRegistry().getSessionStore().updateSession(input.sessionId, { title });
+    const hydrated = await getRegistry().hydrateSession(input.sessionId);
+    const hasManualTitle = !!hydrated.session.metadata?.manualTitle;
+
+    if (!hasManualTitle) {
+        const all = await getRegistry().getSessionStore().listMessages(input.sessionId);
+        const title = summarizeForTitle(all);
+        await getRegistry().getSessionStore().updateSession(input.sessionId, {
+            title,
+            metadata: hydrated.session.metadata,
+        });
+    }
+
     return { messages: appended };
 }
 

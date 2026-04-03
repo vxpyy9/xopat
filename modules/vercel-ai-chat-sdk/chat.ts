@@ -25,6 +25,10 @@ class ChatModule extends XOpatModuleSingleton {
             chatModule: this,
             chatService: this.chatService,
             defaultPersonalityId: cfg.defaultPersonalityId,
+            maxScriptSteps: cfg.maxScriptSteps,
+            maxScriptStepExtensions: cfg.maxScriptStepExtensions,
+            scriptStepExtensionSize: cfg.scriptStepExtensionSize,
+            minSuccessfulProgressStepsBeforeExtension: cfg.minSuccessfulProgressStepsBeforeExtension,
         });
 
         this.refreshScriptConsentFromManager();
@@ -275,11 +279,28 @@ class ChatModule extends XOpatModuleSingleton {
         return stripped || undefined;
     }
 
-    _getChatConfig(): { personalities: ChatPersonality[]; defaultPersonalityId: string } {
-        const inc = (globalThis as any).INCLUDE || (globalThis as any).include || {};
-        const chatCfg: ChatConfigShape = inc.chat || (inc.modules && inc.modules.chat) || {};
+    _getChatConfig(): {
+        personalities: ChatPersonality[];
+        defaultPersonalityId: string;
+        maxScriptSteps: number;
+        maxScriptStepExtensions: number;
+        scriptStepExtensionSize: number;
+        minSuccessfulProgressStepsBeforeExtension: number;
+    } {
+        const positiveInt = (value: unknown, fallback: number) => {
+            const parsed = Number(value);
+            return Number.isFinite(parsed) && parsed > 0 ? Math.floor(parsed) : fallback;
+        };
 
-        const personalities: ChatPersonality[] = Array.isArray(chatCfg.personalities) ? chatCfg.personalities : [];
+        const staticMeta = typeof (this as any).getStaticMeta === 'function'
+            ? ((this as any).getStaticMeta() || {})
+            : {};
+        const legacyInclude = (globalThis as any).INCLUDE || (globalThis as any).include || {};
+        const chatCfg: any = (staticMeta && typeof staticMeta === 'object' && Object.keys(staticMeta).length)
+            ? staticMeta
+            : (legacyInclude.chat || (legacyInclude.modules && legacyInclude.modules.chat) || {});
+
+        const personalities: ChatPersonality[] = Array.isArray(chatCfg.personalities) ? [...chatCfg.personalities] : [];
 
         if (!personalities.length) {
             personalities.push({
@@ -297,7 +318,22 @@ When scripting is not available or insufficient, explain the limitation clearly.
         }
 
         const defaultPersonalityId = chatCfg.defaultPersonalityId || personalities[0]?.id || 'default';
-        return { personalities, defaultPersonalityId };
+        const maxScriptSteps = positiveInt(chatCfg.maxScriptSteps, 12);
+        const maxScriptStepExtensions = positiveInt(chatCfg.maxScriptStepExtensions, 2);
+        const scriptStepExtensionSize = positiveInt(chatCfg.scriptStepExtensionSize, 4);
+        const minSuccessfulProgressStepsBeforeExtension = positiveInt(
+            chatCfg.minSuccessfulProgressStepsBeforeExtension,
+            4
+        );
+
+        return {
+            personalities,
+            defaultPersonalityId,
+            maxScriptSteps,
+            maxScriptStepExtensions,
+            scriptStepExtensionSize,
+            minSuccessfulProgressStepsBeforeExtension,
+        };
     }
 
     _attachToLayout(): void {

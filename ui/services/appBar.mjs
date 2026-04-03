@@ -492,12 +492,19 @@ export class AppBar {
 
         refresh() {
             const history = APPLICATION_CONTEXT.history;
+            if (!history) return;
             const busy = this._isBusy(history);
-            const canUndo = !busy && !!history?.canUndo?.();
-            const canRedo = !busy && !!history?.canRedo?.();
+            const canUndo = !busy && !!history.canUndo?.();
+            const canRedo = !busy && !!history.canRedo?.();
 
             this.subMenu.setItemDisabled('history-undo', !canUndo);
             this.subMenu.setItemDisabled('history-redo', !canRedo);
+
+            const undoName = canUndo ? (history.currentUndoMeta()?.name ?? '') : '';
+            const redoName = canRedo ? (history.currentRedoMeta()?.name ?? '') : '';
+            console.log("History refresh:", { canUndo, canRedo, undoName, redoName, undo: history.currentUndoMeta(), redo: history.currentRedoMeta() });
+            this.subMenu.setItemLabel('history-undo', $.t('main.bar.undo', { action: undoName }));
+            this.subMenu.setItemLabel('history-redo', $.t('main.bar.redo', { action: redoName }));
         }
     }
 

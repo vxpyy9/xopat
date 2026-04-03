@@ -246,6 +246,19 @@ class Dropdown extends BaseSelectableComponent {
         return true;
     }
 
+    setItemLabel(id, label) {
+        const item = this.items[id];
+        if (!item) return false;
+
+        item.label = label;
+        const node = item._node;
+        if (node) {
+            const span = node.querySelector('.flex-1 span.truncate');
+            if (span) span.textContent = label;
+        }
+        return true;
+    }
+
     setSelected(id) {
         this.selectedId = id;
 

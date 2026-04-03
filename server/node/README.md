@@ -432,3 +432,16 @@ Clustered mode
 node cluster-index.js
 ```
 Optional worker count: `XOPAT_WORKERS=4 node cluster-index.js`
+
+
+## Development - Logs
+Start server with: `--dev / XOPAT_DEV_MODE=1 flag`
+
+
+Start example:
+node server/node/index.js --dev
+or:
+XOPAT_DEV_MODE=1 node server/node/index.js
+
+Browser example:
+window.xserver.server.dev.getLogs({ afterId: 0, limit: 200 })

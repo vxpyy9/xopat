@@ -117,7 +117,7 @@ We will use [R] for required and [O] for optional parameters.
     - [O]`fetchAsync` - deprecated
     - [O]`bypassCache` - do not allow using cached values for the user, default `false`
     - [O]`bypassCacheLoadTime` - at viewer initial loading, ignore cache - this can avoid pulling cached content into foreign session 
-    - [0]`background` - hex color #RGB or #RGBA to put as a background color (e.g. for fluorescence), by default transparent
+    - [O]`background` - hex color #RGB or #RGBA to put as a background color (e.g. for fluorescence), by default transparent
 
 - [O]`background` - an array of objects, each defines what images compose the **image** group
     - [R]`dataReference` - index to the `data` array, can be only one unlike in `shaders`, required - it is the 'image' to reference everything against
@@ -233,24 +233,21 @@ The OSD location is configurable through the ENV.
 
 ## Available API
 
-The viewer comes with many available features. Here will be described only where to look for them, most functions are
-either documented or self-explanatory named. Some selected API is described in plugins root ``README``.
-Some OpenSeadragon extensions and custom TileSources are placed within ``external``, styles and asset related stuff in `assets`.
-Definition of UI builder classes are in ``ui_components.js`` whereas existing UI menus are defined along with their (**You should use new UI components, see [this](../../../../../Repos/xopat-shadowaya/ui/README.md)
-**)
-enriched API in ``user_interface.js``. `layers.js` take care of overlay rendering interaction with the UI and
-the engine setup. We encourange browsing the documentation API page.
+Make sure you've read the [INTEGRATION](../INTEGRATION.md) document.
 
-Outside, ``../index.php`` file takes care of the main UI layout and basic functionality around parameter and metadata
-handling, plugin and module loading and the viewport and events management.
+The viewer comes with many available features. Here will be described only where to look for them, the software contains READMEs across the codebase. Some selected API is described in plugins root ``README``.
+Some OpenSeadragon extensions and custom TileSources are placed within ``external``, styles and asset related stuff in `assets`.
+
+For CORE UI, look into `../ui/` folder.``user_interface.js`` serves as definition of globally available UI methods, we are in process of moving
+these definitions to CORE UI services.
 
 Many features are available through ``modules`` that implement additional important functionality.
 
 ### UI
 **You should use new UI components, see [this README](../ui/README.md)**.
-Components are accessible through `UI` global variable. ``user_interface.js`` creates
-a global API ``USER_INTERFACE`` with many UI utilities (notifications, existing menus API...).
-The UI builds upon *tailwind* css and *Daisy UI* system.
+For UI, use the CORE UI available via global `UI` variable. It contains many UI utilities (notifications, existing menus API...).
+> We recommend re-using and extending these instead of pulling new dependencies.
+> Please, make yourself familiar with the UI components and available methods before making new features. 
 
 > We recommend re-using and extending these instead of pulling new dependencies.
 > Please, make yourself familiar with the UI API before making new features. 
@@ -269,11 +266,7 @@ For plugins localization, see the plugins README.
 ### Advanced: Re-using parts of the CORE SERVER in PHP and JS
 <details>
 <summary>Reusing the Viewer Code in custom apps.</summary>
-A good idea is to look at the server's implementation of the developer setup page.
-This way, you can load parts of the viewer code into any web page, using
-either Node.js, PHP, or other available server implementation.
-This is an example how to include modules and plugins API with loading capabilities
-to a custom PHP script:
+This is an example how to include modules and plugins API with loading capabilities to a custom PHP script:
 
 ```php
 // load static config and core functions

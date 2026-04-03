@@ -1,8 +1,8 @@
 # xOpat - Event System
 
-Events are un UI system the most powerful feature: allows to react to events
-happening all over the place without weird dependencies. Note hover, 
-that using events without consideration might lead to unpredictable behaviour, 
+Events are in the UI system the most powerful feature: they allow reacting to events
+happening all over the place without tight dependencies. Note however,
+that using events without consideration might lead to unpredictable behaviour,
 like explosion of events or looped calling.
 
 ## Core Events
@@ -69,11 +69,11 @@ This event fires like ``before-open`` every time the whole viewing session is ch
 #### `viewer-create` | e: `{uniqueId: string, index: Number, viewer: OpenSeadragon.Viewer}
 New viewer is added at position ``index`` in the screen.
 
-#### `viewer-reset` | e: `{uniqueId: string, index: Number, viewer: OpenSeadragon.Viewer}
+#### `viewer-reset` | e: `{uniqueId: string, index: Number, viewer: OpenSeadragon.Viewer}`
 Existing viewer data has been reset, the uniqueId value will change. This event fires with the
 old value. New value can be retrieved once the viewer is reloaded.
 
-#### `viewer-destory` | e: `{uniqueId: string, index: Number, viewer: OpenSeadragon.Viewer}
+#### `viewer-destroy` | e: `{uniqueId: string, index: Number, viewer: OpenSeadragon.Viewer}`
 Existing viewer is removed at position ``index`` in the screen. Existing viewers shrink
 so that the index is occupied if ``viewers.length > index``.
 
@@ -188,41 +188,58 @@ Native OpenSeadragon event called when the canvas gets reloaded or destroyed.
 
 ## History events
 Called on ``APPLICATION_CONTEXT.history`` object, these events are not related to any specific viewer.
+For a full API reference including `currentUndoMeta()`, `currentRedoMeta()`, and `HistoryEntryMeta`, see [HISTORY.md](HISTORY.md).
 
-#### async `register-provider` | e: { provider: HistoryProvider }
+#### async `register-provider` | e: `{ provider: HistoryProvider }`
 This event is fired after a new history provider is registered through ``registerProvider(provider)``.
-The event payload contains the registered provider instance in ``e.provider``.
-
 History providers can override the default undo/redo behavior and are checked before the internal history buffer.
 You can use this event to refresh UI that depends on history capabilities, such as Undo and Redo buttons.
 
-#### async `change-size` | e: { size: number }
+#### async `unregister-provider` | e: `{ provider: HistoryProvider }`
+Fired after a provider is removed via ``unregisterProvider(provider)`` or via the unregister callback returned by ``registerProvider``.
+Use this event to refresh UI that depends on history capabilities.
+
+#### async `change-size` | e: `{ size: number }`
 This event is fired after the history buffer size is changed through the ``size`` setter.
-The event payload contains the requested new size in ``e.size``.
+The payload contains the requested new size in ``e.size``.
+This only changes the configured buffer capacity; it does not truncate existing entries immediately.
 
-This only changes the configured buffer capacity. It does not itself perform an undo or redo step.
-You can use this event to refresh controls that display or depend on history capacity.
+#### async `push` | e: `{ meta: HistoryEntryMeta | undefined }`
+Fired **after** `forward()` succeeds and the entry is committed to the buffer.
+The payload carries the `meta` of the newly committed entry (or `undefined` if no meta was supplied).
+At the moment this event fires, `canUndo()` already returns `true` for the new step.
+You can use this event to refresh Undo and Redo UI.
 
-#### async `push` | e: {}
-This event is fired when a new history step is pushed into the internal history buffer through ``push(forward, backward)``.
-At the moment this event fires, the new history entry has already been written into the buffer and the internal history cursor has been updated.
+#### async `undo` | e: `{ step: HistoryEntryMeta } | { provider: HistoryProvider }`
+Fired when an undo operation completes. Two forms:
+- **Buffer undo:** `{ step: HistoryEntryMeta | undefined }` — contains the meta of the entry that was just undone.
+- **Provider undo:** `{ provider: HistoryProvider }` — the provider that handled the undo step.
 
-In the current implementation, this event fires before the provided ``forward()`` callback is executed.
-You can use this event to refresh Undo and Redo UI, since the history state already reflects the new step.
+This event fires after `backward()` executes and the buffer cursor is moved back.
 
-#### async `undo` | e: {}
-This event is fired when an undo operation is performed, either by a registered history provider or by the internal history buffer.
-It indicates that the application is moving one step back in history.
+#### async `redo` | e: `{ step: HistoryEntryMeta } | { provider: HistoryProvider }`
+Fired when a redo operation completes. Two forms:
+- **Buffer redo:** `{ step: HistoryEntryMeta | undefined }` — contains the meta of the entry that was just redone.
+- **Provider redo:** `{ provider: HistoryProvider }` — the provider that handled the redo step.
 
-In the current implementation, if the undo is handled by the internal buffer, this event fires after ``backward()`` is executed but before the internal cursor and redo boundary are fully finalized.
-If you need the final ``canUndo()`` / ``canRedo()`` state inside the event handler, defer the read with ``queueMicrotask(...)`` or move ``raiseEvent('undo')`` to the end of the method.
+This event fires after `forward()` executes and the buffer cursor advances.
 
-#### async `redo` | e: {}
-This event is fired when a redo operation is performed, either by a registered history provider or by the internal history buffer.
-It indicates that the application is moving one step forward in history.
+#### async `clear` | e: options object
+Fired after the committed buffer is cleared. The payload is the options object passed to `clear(options)`.
+If `options.resetProviders` was `true`, all provider `reset()` calls have already completed when this fires.
 
-For buffer-backed history, this event fires after the internal cursor moves to the next entry and after ``forward()`` is executed.
-You can use this event to refresh Undo and Redo UI based on the updated history state.
+#### `history-busy-change` | e: `{ busy: boolean, queued: number, running: number, pending: number }`
+Fired whenever the internal promise queue state changes — i.e. when an operation starts queuing, starts running, or finishes.
+Useful for showing loading indicators while undo/redo is in progress.
+- `busy` — `true` while any operation is actively executing.
+- `queued` — number of operations waiting to start.
+- `running` — number of operations currently executing (0 or 1 in practice).
+- `pending` — `queued + running`.
+
+#### `error` | e: `{ action: string, error: any }`
+Fired when any history action (`push`, `undo`, `redo`, `provider.undo`, etc.) throws an unhandled exception.
+- `action` — the internal action name string (e.g. `"push"`, `"undo"`, `"provider.undo"`).
+- `error` — the thrown error object.
 
 ## User Events
 Called on ``xOpatUser.instance()`` object, these events support contextualized logging.

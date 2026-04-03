@@ -40,7 +40,7 @@ abstract class XOpatHistoryProvider implements HistoryProvider {
 const XOpatHistory = class XOpatHistory extends OpenSeadragon.EventSource {
     static XOpatHistoryProvider: typeof XOpatHistoryProvider = XOpatHistoryProvider;
 
-    _buffer: Array<{ forward: () => any; backward: () => any; meta?: Record<string, any> } | null>;
+    _buffer: Array<{ forward: () => any; backward: () => any; meta?: HistoryEntryMeta } | null>;
     _buffidx: number;
     _lastValidIndex: number;
     _providers: XOpatHistoryProvider[];
@@ -116,6 +116,24 @@ const XOpatHistory = class XOpatHistory extends OpenSeadragon.EventSource {
         return this._lastValidIndex >= 0 && this._buffidx !== this._lastValidIndex;
     }
 
+    /**
+     * Returns the metadata of the history entry that would be undone next, or undefined.
+     * Useful for showing contextual undo labels like "Undo {{action}}".
+     */
+    currentUndoMeta(): HistoryEntryMeta | undefined {
+        return this._buffer[this._buffidx]?.meta;
+    }
+
+    /**
+     * Returns the metadata of the history entry that would be redone next, or undefined.
+     * Useful for showing contextual redo labels like "Redo {{action}}".
+     */
+    currentRedoMeta(): HistoryEntryMeta | undefined {
+        const nextIndex = (this._buffidx + 1) % this.BUFFER_LENGTH;
+        if (!this.hasStackRedo()) return undefined;
+        return this._buffer[nextIndex]?.meta;
+    }
+
     clear(options: { resetProviders?: boolean, reason?: string } = {}): Promise<void> {
         return this._enqueue('clear', async () => {
             this._buffer = [];
@@ -175,9 +193,11 @@ const XOpatHistory = class XOpatHistory extends OpenSeadragon.EventSource {
      * you must not call this method/logics manually.
      * @param {*} forward function to execute the forward (redo) operation, it is executed once upon call
      * @param {*} backward function to execute the backward (undo) operation
+     * @param {HistoryEntryMeta} [meta] optional metadata stored with the entry.
+     *   Include a `name` string so the UI can show e.g. "Undo {{action}}".
      * @return {any} return value of the forward function executed
      */
-    push(forward: () => any, backward: () => any, meta?: Record<string, any>): Promise<any> {
+    push(forward: () => any, backward: () => any, meta?: HistoryEntryMeta): Promise<any> {
         if (typeof forward !== 'function' || typeof backward !== 'function') {
             throw new Error("Both forward and backward must be functions.");
         }
@@ -195,8 +215,10 @@ const XOpatHistory = class XOpatHistory extends OpenSeadragon.EventSource {
 
     /**
      * Push action without executing forward. Use this carefully, prefer using push() if possible.
+     * @param {HistoryEntryMeta} [meta] optional metadata stored with the entry.
+     *   Include a `name` string so the UI can show e.g. "Undo {{action}}".
      */
-    pushExecuted(forward: () => any, backward: () => any, meta?: Record<string, any>): Promise<void> {
+    pushExecuted(forward: () => any, backward: () => any, meta?: HistoryEntryMeta): Promise<void> {
         if (typeof forward !== 'function' || typeof backward !== 'function') {
             throw new Error("Both forward and backward must be functions.");
         }
@@ -337,7 +359,7 @@ const XOpatHistory = class XOpatHistory extends OpenSeadragon.EventSource {
         }
     }
 
-    _commitEntry(forward: () => any, backward: () => any, meta?: Record<string, any>) {
+    _commitEntry(forward: () => any, backward: () => any, meta?: HistoryEntryMeta) {
         this._buffidx = (this._buffidx + 1) % this.BUFFER_LENGTH;
         this._buffer[this._buffidx] = { forward, backward, meta };
         this._lastValidIndex = this._buffidx;

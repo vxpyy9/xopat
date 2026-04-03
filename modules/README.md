@@ -127,7 +127,7 @@ static instance();
 static instantiated();
 ````
 
-### Selected global API functions todo consider getOption shift to classes
+### Selected global API functions
 #### `APPLICATION_CONTEXT::getOption(key, defaultValue=undefined)`
 Returns stored value if available, supports cookie caching and the value gets exported with the viewer. The value itself is
 read from the `params` object given to the constructor, unless cookie cache overrides it. Default value can be ommited
