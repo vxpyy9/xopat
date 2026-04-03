@@ -266,8 +266,7 @@
             "kinetic": "kinetic-v5.1.0.min.js",
             "scroll_to": "scrollTo.min.js",
             "unzip_it": "unzipit.min.js",
-            "render": "flex-renderer.js"
-            //"geotiff": "geotiff-tilesource.min.js"
+            "render": "flex-renderer/flex-renderer.js"
         },
         // src/external  key: source / [sources,list]
         "external": {
@@ -278,7 +277,6 @@
             ],
             "common": [
                 "enjoyhint.js",
-//                "cookie-storage.js",
                 "js.cookie.js",
                 "osd_tools.js",
                 "scalebar.js",
@@ -298,7 +296,7 @@
         "src": {
             //"env": "",
             "loader": ["dist/store.js", "dist/loader.js"],
-            "deps": ["ui-components.js", "shader-configurator.js"],
+            "deps": ["ui-components.js"],
             "app": [
               "dist/classes/user.js",
               "parse-input.js",

@@ -24,7 +24,7 @@ export class MobileBottomBar {
 
         this.root = this._build();
 
-        const toolbarsContainer = new Div({ id:"toolbars-container", class:"w-full", style:"pointer-events: none; position: absolute; top: 0; left: 0; z-index: 999999;" });
+        const toolbarsContainer = new Div({ id:"toolbars-container", class:"w-full", style:"pointer-events: none; position: absolute; top: 0; left: 0; z-index: 980;" });
         toolbarsContainer.attachTo(this.context);
         this.context.appendChild(this.root);
         this.context.style.height = "auto";
@@ -251,7 +251,7 @@ export class MobileBottomBar {
             "bottom: calc(100% + 8px)",
             "min-width: max(180px, 40vw)",
             "max-width: min(320px, calc(100vw - 16px))",
-            "z-index: 1200",
+            "z-index: 980",
             "padding: 0.25rem",
             "display: flex",
             "flex-direction: column",

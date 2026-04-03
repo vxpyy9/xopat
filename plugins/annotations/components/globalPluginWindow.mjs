@@ -81,13 +81,13 @@ export const globalPluginWindowMethods = {
                     id: 'toolbar-history-undo',
                     icon: 'fa-rotate-left',
                     label: this.t('annotations.toolbar.undo'),
-                    onClick: () => this.context.undo()
+                    onClick: () => APPLICATION_CONTEXT.history.undo()
                 }),
                 new ui.ToolbarItem({
                     id: 'toolbar-history-redo',
                     icon: 'fa-rotate-right',
                     label: this.t('annotations.toolbar.redo'),
-                    onClick: () => this.context.redo()
+                    onClick: () => APPLICATION_CONTEXT.history.redo()
                 }),
                 new ui.ToolbarItem({
                     id: 'toolbar-history-metrics',

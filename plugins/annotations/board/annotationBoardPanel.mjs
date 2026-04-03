@@ -780,15 +780,34 @@ export class AnnotationBoardPanel {
 
     _captureSnapshot() {
         const fabric = this.fabric;
+
         return {
-            boardOrder: fabric.getBoardOrder?.() || this._getBoardEntries().map(x => ({ ...x })),
+            boardOrder: (fabric.getBoardOrder?.() || this._getBoardEntries()).map(entry => ({
+                type: entry.type,
+                id: String(entry.id),
+            })),
             layers: (fabric.getAllLayers?.() || []).map(layer => ({
                 id: String(layer.id),
                 name: layer.name,
                 visible: layer.visible,
-                objects: layer.getObjects?.().map(obj => obj) || []
+                objectIds: (layer.getObjects?.() || [])
+                    .filter(obj => fabric.isAnnotation?.(obj))
+                    .map(obj => String(obj.internalID ?? obj.incrementId))
             }))
         };
+    }
+
+    _resolveSnapshotObjects(objectIds = []) {
+        const fabric = this.fabric;
+        const allObjects = fabric.canvas?.getObjects?.() || [];
+        const byId = new Map();
+
+        for (const object of allObjects) {
+            if (!fabric.isAnnotation?.(object)) continue;
+            byId.set(String(object.internalID ?? object.incrementId), object);
+        }
+
+        return objectIds.map(id => byId.get(String(id))).filter(Boolean);
     }
 
     _readDomSnapshot() {
@@ -819,7 +838,6 @@ export class AnnotationBoardPanel {
 
     _applySnapshot(snapshot) {
         const fabric = this.fabric;
-        if (!fabric || !snapshot) return;
 
         if (fabric.clearBoardOrder) fabric.clearBoardOrder();
         (snapshot.boardOrder || []).forEach((entry, index) => {
@@ -827,11 +845,12 @@ export class AnnotationBoardPanel {
         });
 
         const idsInLayers = new Set();
+
         for (const layerState of snapshot.layers || []) {
             const layer = fabric.getLayer(layerState.id);
             if (!layer) continue;
 
-            const objects = (layerState.objects || []).filter(Boolean);
+            const objects = this._resolveSnapshotObjects(layerState.objectIds);
             layer.name = layerState.name;
             layer.visible = layerState.visible;
 
@@ -843,7 +862,7 @@ export class AnnotationBoardPanel {
                 }
 
                 object.layerID = String(layer.id);
-                idsInLayers.add(String(object.internalID));
+                idsInLayers.add(String(object.internalID ?? object.incrementId));
             }
 
             layer.setObjects(objects, true);
@@ -854,7 +873,8 @@ export class AnnotationBoardPanel {
         for (const object of allObjects) {
             if (!fabric.isAnnotation?.(object)) continue;
 
-            if (!idsInLayers.has(String(object.internalID))) {
+            const objectKey = String(object.internalID ?? object.incrementId);
+            if (!idsInLayers.has(objectKey)) {
                 if (object.layerID) fabric.removeAnnotationFromLayer?.(object);
                 object.layerID = undefined;
             }
@@ -863,10 +883,18 @@ export class AnnotationBoardPanel {
         this.requestRender(true);
     }
 
-    _handleDrop() {
+    async _handleDrop() {
         const before = this._captureSnapshot();
         const after = this._applyDomOrder();
-        this.context.history.push(() => this._applySnapshot(after), () => this._applySnapshot(before));
+
+        await APPLICATION_CONTEXT.history.pushExecuted(
+            () => this._applySnapshot(after),
+            () => this._applySnapshot(before),
+            {
+                kind: 'annotations.board-drop',
+                viewerId: this.viewerId
+            }
+        );
     }
 
     _applyDomOrder() {
@@ -912,23 +940,6 @@ export class AnnotationBoardPanel {
 
         this.requestRender(true);
         return this._captureSnapshot();
-    }
-
-    moveAnnotationInBoard(incrementId, direction) {
-        const fabric = this.fabric;
-        const order = [...(fabric.getBoardOrder?.() || this._getBoardEntries())];
-        const index = order.findIndex(entry => entry.type === 'annotation' && String(entry.id) === String(incrementId));
-        if (index < 0) return;
-
-        const nextIndex = direction === 'up' ? index - 1 : index + 1;
-        if (nextIndex < 0 || nextIndex >= order.length) return;
-
-        const [entry] = order.splice(index, 1);
-        order.splice(nextIndex, 0, entry);
-        const before = this._captureSnapshot();
-        const after = { ...before, boardOrder: order };
-        this.context.history.push(() => this._applySnapshot(after), () => this._applySnapshot(before));
-        this._applySnapshot(after);
     }
 
     _handleSelect(evt) {

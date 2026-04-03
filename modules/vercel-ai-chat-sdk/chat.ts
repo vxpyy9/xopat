@@ -132,12 +132,29 @@ class ChatModule extends XOpatModuleSingleton {
         return manager.getAllowedApiManifest() || { namespaces: [] };
     }
 
-    getActiveChatContextId(): string | null {
-        const activeSessionContextId = this.chatService?.getActiveContextId?.();
-        if (activeSessionContextId) return activeSessionContextId;
+    _resolveLiveViewerContextId(preferred?: string | null): string | null {
+        const viewers = (globalThis as any).VIEWER_MANAGER?.viewers || [];
+        const normalizedPreferred = typeof preferred === 'string' ? preferred.trim() : '';
 
-        const providerId = this.chatPanel?._providerId || null;
-        return this.chatService?.getProviderContextId?.(providerId) || null;
+        if (normalizedPreferred && viewers.some((viewer: any) => viewer?.uniqueId === normalizedPreferred)) {
+            return normalizedPreferred;
+        }
+
+        const activeViewerId = (globalThis as any).VIEWER_MANAGER?.activeViewer?.uniqueId;
+        if (typeof activeViewerId === 'string' && activeViewerId.trim()) {
+            return activeViewerId.trim();
+        }
+
+        if (viewers.length === 1 && typeof viewers[0]?.uniqueId === 'string' && viewers[0].uniqueId.trim()) {
+            return viewers[0].uniqueId.trim();
+        }
+
+        return null;
+    }
+
+    getActiveChatContextId(): string | null {
+        const preferred = this.chatService?.getActiveViewerContextId?.() || null;
+        return this._resolveLiveViewerContextId(preferred);
     }
 
     _getScriptExecutionContext(): any | null {
@@ -146,6 +163,7 @@ class ChatModule extends XOpatModuleSingleton {
             return null;
         }
 
+        const activeSessionId = this.chatService?.getActiveSessionId?.() || null;
         const viewerContextId = this.getActiveChatContextId();
         const contextId = viewerContextId || manager.defaultContextId || 'default';
         const context = manager.getContext(contextId);
@@ -154,12 +172,19 @@ class ChatModule extends XOpatModuleSingleton {
             context.setActiveViewerContextId(viewerContextId);
         }
 
+        if (viewerContextId && activeSessionId) {
+            this.chatService?.setSessionViewerContextId?.(activeSessionId, viewerContextId);
+        }
+
         context?.setLabel?.(`Chat: ${contextId}`);
         context?.patchMetadata?.({
             source: 'chat',
             providerId: this.chatPanel?._providerId || null,
-            sessionId: this.chatService?.getActiveSessionId?.() || null,
+            sessionId: activeSessionId,
             viewerContextId,
+            providerRuntimeContextId: this.chatService?.getSessionProviderRuntimeContextId?.(activeSessionId)
+                || this.chatService?.getSessionProviderContextId?.(activeSessionId)
+                || null,
         });
 
         return context;
@@ -170,7 +195,7 @@ class ChatModule extends XOpatModuleSingleton {
 
         if (!context || typeof context.executeScript !== 'function') {
             return {
-                role: 'tool',
+                role: 'user',
                 parts: [{ ok: false, type: 'script-result', text: 'The requested action could not be completed because scripting is not available.' }],
                 content: 'The requested action could not be completed because scripting is not available.',
                 createdAt: new Date(),
@@ -218,7 +243,7 @@ class ChatModule extends XOpatModuleSingleton {
         } catch (error) {
             const message = error instanceof Error ? error.message : String(error);
             return {
-                role: 'tool',
+                role: 'user',
                 parts: [{ ok: false, type: 'script-result', text: `The requested action could not be completed: ${message}` }],
                 content: `The requested action could not be completed: ${message}`,
                 createdAt: new Date(),
@@ -298,13 +323,16 @@ When scripting is not available or insufficient, explain the limitation clearly.
         const isDataUrl = (value: unknown): value is string =>
             typeof value === 'string' && /^data:[^;]+;base64,/i.test(value.trim());
 
+        const isImageDataUrl = (value: unknown): value is string =>
+            isDataUrl(value) && /^data:image\//i.test(String(value).trim());
+
         const inferMimeType = (value: string, fallback = 'application/octet-stream') => {
             const match = value.match(/^data:([^;,]+)(?:;charset=[^;,]+)?;base64,/i);
             return match?.[1] || fallback;
         };
 
         const asPlainTextMessage = (text: string, ok = true): ChatMessage => ({
-            role: 'tool',
+            role: 'user',
             parts: [{ ok, type: 'script-result', text }],
             content: text,
             createdAt: new Date(),
@@ -319,7 +347,7 @@ When scripting is not available or insufficient, explain the limitation clearly.
             });
 
             return {
-                role: 'tool',
+                role: 'user',
                 parts: [{
                     type: 'image',
                     attachmentId: uploaded.id,
@@ -342,7 +370,7 @@ When scripting is not available or insufficient, explain the limitation clearly.
             });
 
             return {
-                role: 'tool',
+                role: 'user',
                 parts: [{
                     type: 'file',
                     attachmentId: uploaded.id,
@@ -363,19 +391,23 @@ When scripting is not available or insufficient, explain the limitation clearly.
         if (typeof result === 'string') {
             const value = result.trim();
 
-            if (isImageLike(value) && this._isModelImageCapable() && imageLikeToDataUrl) {
+            if (isImageDataUrl(value)) {
+                return await asImageMessage(value, 'script-image.png');
+            }
+
+            if (isImageLike(value) && imageLikeToDataUrl) {
                 const dataUrl = await imageLikeToDataUrl(value);
                 return await asImageMessage(dataUrl);
             }
 
-            if (isDataUrl(value) && this._isModelFileCapable()) {
+            if (isDataUrl(value)) {
                 return await asFileMessage(value);
             }
 
             return asPlainTextMessage(value || 'Done.');
         }
 
-        if (isImageLike(result) && this._isModelImageCapable() && imageLikeToDataUrl) {
+        if (isImageLike(result) && imageLikeToDataUrl) {
             const dataUrl = await imageLikeToDataUrl(result);
             return await asImageMessage(dataUrl);
         }
@@ -385,7 +417,26 @@ When scripting is not available or insufficient, explain the limitation clearly.
             const textChunks: string[] = [];
 
             for (const item of result) {
-                if (isImageLike(item) && this._isModelImageCapable() && imageLikeToDataUrl) {
+                if (typeof item === 'string' && isImageDataUrl(item)) {
+                    const uploaded = await this._storeScriptAttachment({
+                        kind: 'image',
+                        dataUrl: item,
+                        mimeType: inferMimeType(item, 'image/png'),
+                        name: 'script-image.png',
+                    });
+
+                    parts.push({
+                        type: 'image',
+                        attachmentId: uploaded.id,
+                        mimeType: uploaded.mimeType,
+                        name: uploaded.name,
+                        dataUrl: uploaded.dataUrl,
+                        metadata: uploaded.metadata,
+                    });
+                    continue;
+                }
+
+                if (isImageLike(item) && imageLikeToDataUrl) {
                     const dataUrl = await imageLikeToDataUrl(item);
                     const uploaded = await this._storeScriptAttachment({
                         kind: 'image',
@@ -405,7 +456,7 @@ When scripting is not available or insufficient, explain the limitation clearly.
                     continue;
                 }
 
-                if (typeof item === 'string' && isDataUrl(item) && this._isModelFileCapable()) {
+                if (typeof item === 'string' && isDataUrl(item)) {
                     const uploaded = await this._storeScriptAttachment({
                         kind: 'file',
                         dataUrl: item,
@@ -444,7 +495,7 @@ When scripting is not available or insufficient, explain the limitation clearly.
 
             if (parts.length) {
                 return {
-                    role: 'tool',
+                    role: 'user',
                     parts,
                     content: textChunks.join('\n\n') || 'Done.',
                     createdAt: new Date(),

@@ -22,21 +22,23 @@
  * 	borderDashing: number,
  * 	ignoreCustomStyling: boolean
  * }} AuthorConfig
- *
- * Consider https://alimozdemir.com/posts/fabric-js-history-operations-undo-redo-and-useful-tips/
- *	- blending ?
  */
 window.OSDAnnotations = class extends XOpatModuleSingleton {
 
-	constructor() {
-		super("annotations");
-		this.version = "0.0.1";
-		this.session = this.version + "_" + Date.now();
+    constructor() {
+        super("annotations");
+        this.version = "0.0.1";
+        this.session = this.version + "_" + Date.now();
 
         this._activeViewer = VIEWER;
         this.commentsEnabled = true;
-		this._init();
-		this.user = XOpatUser.instance();
+        this._init();
+        this.user = XOpatUser.instance();
+
+        this._annotationsHistoryProvider = new OSDAnnotations.HistoryProvider(this);
+        this._disposeHistoryProvider = APPLICATION_CONTEXT.history.registerProvider(this._annotationsHistoryProvider);
+        this._hasUnsavedAnnotationChanges = false;
+
         VIEWER_MANAGER.addHandler('before-open', () => this.setMode(this.Modes.AUTO));
 
         this._editSelectionSyncDepth = 0;
@@ -209,14 +211,14 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
         return fabric.export();
     }
 
-	async importViewerData(viewer, key, viewerTargetID, data) {
-		if (viewerTargetID && await this._applyPendingUnsavedSnapshot(viewer, viewerTargetID)) {
-			return;
-		}
-		if (data === undefined || data === null) return;
+    async importViewerData(viewer, key, viewerTargetID, data) {
+        if (viewerTargetID && await this._applyPendingUnsavedSnapshot(viewer, viewerTargetID)) {
+            return;
+        }
+        if (data === undefined || data === null) return;
 
         const fabric = this.getFabric(viewer);
-        const options = { inheritSession: true };
+        const options = { inheritSession: true, history: false };
         await fabric.import(data, options);
     }
 
@@ -349,22 +351,22 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 
 		const fabric = this.getFabric(viewer);
 
-		if (pending.data !== undefined && pending.data !== null) {
-			await fabric.import(pending.data, { format: 'native', inheritSession: true }, true);
-		} else if (Array.isArray(pending.objects)) {
-			await fabric._loadObjects({ objects: pending.objects }, true);
-			this.raiseEvent('import', {
-				owner: fabric,
-				options: {},
-				clear: true,
-				data: {
-					objects: pending.objects,
-					presets: this._loadedUnsavedPresets ? this.presets.toObject() : undefined
-				},
-			});
-		} else {
-			return false;
-		}
+        if (pending.data !== undefined && pending.data !== null) {
+            await fabric.import(pending.data, { format: 'native', inheritSession: true, history: false }, true);
+        } else if (Array.isArray(pending.objects)) {
+            await fabric._loadObjects({ objects: pending.objects }, true);
+            this.raiseEvent('import', {
+                owner: fabric,
+                options: {},
+                clear: true,
+                data: {
+                    objects: pending.objects,
+                    presets: this._loadedUnsavedPresets ? this.presets.toObject() : undefined
+                },
+            });
+        } else {
+            return false;
+        }
 
 		this._restoredUnsavedViewerIds.add(viewerTargetID);
 		delete this._pendingUnsavedSnapshots[viewerTargetID];
@@ -391,36 +393,41 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 			this._restoredUnsavedViewerIds = this._restoredUnsavedViewerIds || new Set();
 			await this._initIoFromCache();
 
-			let guard = 0; const _this=this;
-			function editRoutine(event, force=false) {
-				if (force || guard++ > 10) {
-					guard = 0;
-					void (async () => {
-						const snapshot = await _this._buildUnsavedSnapshot();
-						await _this._writeUnsavedSnapshot(snapshot);
-					})();
-				}
-			}
+            let guard = 0; const _this = this;
 
-			this.addHandler('export', () => {
-				if (_this._suppressUnsavedExportReset) return;
-				_this._clearUnsavedSnapshotState();
-				void _this._writeUnsavedSnapshot(null);
-				guard = 0;
-			});
-			this.addFabricHandler('annotation-create', editRoutine);
-			this.addFabricHandler('annotation-delete', editRoutine);
-			this.addFabricHandler('annotation-replace', editRoutine);
-			this.addFabricHandler('annotation-edit', editRoutine);
+            function editRoutine(event, force = false) {
+                _this._hasUnsavedAnnotationChanges  = true;
+
+                if (force || guard++ > 10) {
+                    guard = 0;
+                    void (async () => {
+                        const snapshot = await _this._buildUnsavedSnapshot();
+                        await _this._writeUnsavedSnapshot(snapshot);
+                    })();
+                }
+            }
+
+            this.addHandler('export', () => {
+                if (_this._suppressUnsavedExportReset) return;
+                _this._clearUnsavedSnapshotState();
+                _this._hasUnsavedAnnotationChanges = false;
+                void _this._writeUnsavedSnapshot(null);
+                guard = 0;
+            });
+
+            this.addFabricHandler('annotation-create', editRoutine);
+            this.addFabricHandler('annotation-delete', editRoutine);
+            this.addFabricHandler('annotation-replace', editRoutine);
+            this.addFabricHandler('annotation-edit', editRoutine);
+            window.addEventListener("beforeunload", event => {
+                if (guard === 0 || !_this._hasUnsavedAnnotationChanges) return;
+                editRoutine(null, true);
+            });
 			VIEWER_MANAGER.addHandler('viewer-create', event => {
 				const targetId = event?.uniqueId;
 				const viewer = targetId ? VIEWER_MANAGER.getViewer(targetId, false) || event?.viewer : event?.viewer;
 				if (!viewer || !targetId) return;
 				void _this._applyPendingUnsavedSnapshot(viewer, targetId);
-			});
-			window.addEventListener("beforeunload", event => {
-				if (guard === 0 || !_this.history.canUndo()) return;
-				editRoutine(null, true);
 			});
 
 			if (!this._loadedUnsavedPresets) {
@@ -753,48 +760,21 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
         }
     }
 
-	/**
-	 * Undo action, handled by either a history implementation, or the current mode
-	 * todo remove
-	 */
-	undo() {
-		const can = this.mode.canUndo();
-		if (can === undefined) return this.history.undo();
-		this.mode.undo();
-	}
+    getDynamicHistoryDelegate() {
+        // 1) let the active mode expose a delegate
+        const modeDelegate = this.mode.getHistoryDelegate?.();
+        if (modeDelegate && (modeDelegate.isActive?.() ?? true)) {
+            return modeDelegate;
+        }
 
-	/**
-	 * Redo action, handled by either a history implementation, or the current mode
-	 * todo remove
-	 */
-	redo() {
-		const can = this.mode.canRedo();
-		if (can === undefined) return this.history.redo();
-		this.mode.redo();
-	}
+        // 2) optional: viewer/fabric level edit session can expose one too
+        const fabricDelegate = this.fabric?.getDynamicHistoryDelegate?.();
+        if (fabricDelegate && (fabricDelegate.isActive?.() ?? true)) {
+            return fabricDelegate;
+        }
 
-	/**
-	 * Check if undo can be performed, returns true/false. Called does not know whether undo is being handled
-	 * on the history or active mode level.
-	 * @return {boolean}
-	 */
-	canUndo() {
-		const can = this.mode.canUndo();
-		if (can !== undefined) return can;
-		return this.history.canUndo();
-	}
-
-	/**
-	 * Check if redo can be performed, returns true/false. Called does not know whether undo is being handled
-	 * on the history or active mode level.
-	 * @return {boolean}
-	 */
-	canRedo() {
-		const can = this.mode.canRedo();
-		if (can !== undefined) return can;
-		return this.history.canRedo();
-	}
-
+        return null;
+    }
 
 	/**
 	 * Set annotation visual property to permanent value
@@ -1078,7 +1058,8 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
         this._annotationLabelIncrement = 0;
 		this._storeCacheSnapshots = this.getStaticMeta("storeCacheSnapshots", false);
 		this._exportPrivateAnnotations = this.getStaticMeta("exportPrivate", false); // todo make this more configurable
-		this.cursor = {
+		this._provideDefaultPresets = this.getStaticMeta("provideDefaultPresets", true);
+        this.cursor = {
 			mouseTime: Infinity, //OSD handler click timer
 			isDown: false,  //FABRIC handler click down recognition
 		};
@@ -1089,11 +1070,6 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 		 * @member {OSDAnnotations.PresetManager}
 		 */
 		this.presets = new OSDAnnotations.PresetManager("presets", this);
-		/**
-		 * History reference
-		 * @member {History}
-		 */
-		this.history = APPLICATION_CONTEXT.history;
 
 		/**
 		 * FreeFormTool reference
@@ -1181,10 +1157,6 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
                     this.setMode(this.Modes.AUTO);
                     return;
                 }
-            }
-
-            if (e.ctrlKey && !e.altKey && (e.key === "z" || e.key === "Z")) {
-                return e.shiftKey ? this.redo() : this.undo();
             }
         }
 
@@ -1414,6 +1386,47 @@ in order to work. Did you maybe named the ${type} factory implementation differe
     }
 };
 
+OSDAnnotations.HistoryProvider = class extends XOpatHistory.XOpatHistoryProvider {
+    constructor(module) {
+        super();
+        this.module = module;
+    }
+
+    get importance() {
+        // Higher than normal providers so in-progress annotation interactions win first
+        return 100;
+    }
+
+    _delegate() {
+        return this.module.getDynamicHistoryDelegate?.() || null;
+    }
+
+    canUndo() {
+        const delegate = this._delegate();
+        return !!delegate?.canUndo?.();
+    }
+
+    canRedo() {
+        const delegate = this._delegate();
+        return !!delegate?.canRedo?.();
+    }
+
+    async undo() {
+        const delegate = this._delegate();
+        if (!delegate?.canUndo?.()) return false;
+
+        const result = await delegate.undo?.();
+        return result !== false;
+    }
+
+    async redo() {
+        const delegate = this._delegate();
+        if (!delegate?.canRedo?.()) return false;
+
+        const result = await delegate.redo?.();
+        return result !== false;
+    }
+};
 
 /**
  * @classdesc Default annotation state parent class, also a valid mode (does nothing).
@@ -1602,25 +1615,9 @@ OSDAnnotations.AnnotationState = class {
 		}
 	}
 
-	/**
-	 * Undo action, by default noop
-	 */
-	undo() {
-	}
-
-	/**
-	 * Undo action, by default return undefined: not handled (undo() will not be called)
-	 * @return {boolean|undefined} if undefined, makes system fallback to a builtin history
-	 */
-	canUndo() {
-		return undefined;
-	}
-
-	/**
-	 * Redo action, by default noop
-	 */
-	redo() {
-	}
+    getHistoryDelegate() {
+        return null;
+    }
 
 	/**
 	 * Discard action: default deletes active object
@@ -1628,14 +1625,6 @@ OSDAnnotations.AnnotationState = class {
 	 */
 	discard(withWarning=true) {
 		this.context.fabric.deleteSelection(withWarning);
-	}
-
-	/**
-	 * Redo action, by default return undefined: not handled (redo() will not be called)
-	 * @return {boolean|undefined} if undefined, makes system fallback to a builtin history
-	 */
-	canRedo() {
-		return undefined;
 	}
 
 	/**
@@ -1786,15 +1775,25 @@ OSDAnnotations.StateFreeFormTool = class extends OSDAnnotations.AnnotationState 
 		super(context, id, icon, description);
 	}
 
-	canUndo() {
-		if (this.context.freeFormTool.isRunning()) return false;
-		return undefined;
-	}
+    getHistoryDelegate() {
+        const factory = this._lastUsed;
+        if (!factory) return null;
 
-	canRedo() {
-		if (this.context.freeFormTool.isRunning()) return false;
-		return undefined;
-	}
+        if (
+            typeof factory.canUndoCreate !== "function" &&
+            typeof factory.canRedoCreate !== "function"
+        ) {
+            return null;
+        }
+
+        return {
+            isActive: () => this.context.freeFormTool.isRunning(),
+            canUndo: () => !!factory.canUndoCreate?.(),
+            canRedo: () => !!factory.canRedoCreate?.(),
+            undo: () => factory.undoCreate?.(),
+            redo: () => factory.redoCreate?.(),
+        };
+    }
 
 	fftStartWith(point, ffTool, reference, wasCreated) {
 		if (reference.asPolygon) {
@@ -2061,19 +2060,25 @@ OSDAnnotations.StateCustomCreate = class extends OSDAnnotations.AnnotationState 
         return super.locksViewer();
     }
 
-    canUndo() {
-		if (this._lastUsed) return this._lastUsed.canUndoCreate();
-		return undefined;
-	}
+    getHistoryDelegate() {
+        const factory = this._lastUsed;
+        if (!factory) return null;
 
-	canRedo() {
-		if (this._lastUsed) return this._lastUsed.canRedoCreate();
-		return undefined;
-	}
+        if (
+            typeof factory.canUndoCreate !== "function" &&
+            typeof factory.canRedoCreate !== "function"
+        ) {
+            return null;
+        }
 
-	undo() {
-		if (this._lastUsed) return this._lastUsed.undoCreate();
-	}
+        return {
+            isActive: () => !!factory && !!factory.getCurrentObject?.(),
+            canUndo: () => !!factory.canUndoCreate?.(),
+            canRedo: () => !!factory.canRedoCreate?.(),
+            undo: () => factory.undoCreate?.(),
+            redo: () => factory.redoCreate?.(),
+        };
+    }
 
 	handleClickUp(o, point, isLeftClick, objectFactory) {
 		if (!objectFactory) return false;
@@ -2154,16 +2159,6 @@ OSDAnnotations.StateCorrectionTool = class extends OSDAnnotations.StateFreeFormT
 	constructor(context) {
 		super(context, "fft-correct", "fa-paintbrush", "🆉  correction tool");
 		this.candidates = null;
-	}
-
-	canUndo() {
-		if (this.context.freeFormTool.isRunning()) return false;
-		return undefined;
-	}
-
-	canRedo() {
-		if (this.context.freeFormTool.isRunning()) return false;
-		return undefined;
 	}
 
 	handleClickUp(o, point, isLeftClick, objectFactory) {

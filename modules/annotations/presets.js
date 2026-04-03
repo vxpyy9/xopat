@@ -170,7 +170,7 @@ OSDAnnotations.PresetManager = class {
      */
     constructor(selfName, context) {
         this._context = context;
-        this._presets = {};
+        this._presets = new Map();
         //active presets for mouse buttons, default state create one
         this.left = undefined;
         this.right = undefined;
@@ -235,14 +235,15 @@ OSDAnnotations.PresetManager = class {
 
     /**
      * Add new preset with default values
-     * @param {string?} id to create, generates random otherwise
-     * @param {string?} categoryName custom name
+     * @param {string} [id] to create, generates random otherwise
+     * @param {string} [categoryName=""] custom name
+     * @param {string} [color] hex color
      * @event preset-create
      * @returns {OSDAnnotations.Preset} newly created preset
      */
-    addPreset(id=undefined, categoryName="") {
-        let preset = new OSDAnnotations.Preset(id || Date.now().toString(), this._context.polygonFactory, categoryName, this.randomColorHexString());
-        this._presets[preset.presetID] = preset;
+    addPreset(id=undefined, categoryName="", color=undefined) {
+        let preset = new OSDAnnotations.Preset(id || Date.now().toString(), this._context.polygonFactory, categoryName, color || this.randomColorHexString());
+        this._presets.set(preset.presetID, preset);
         this._context.raiseEvent('preset-create', {preset: preset});
         return preset;
     }
@@ -271,13 +272,17 @@ OSDAnnotations.PresetManager = class {
         return this._withDynamicOptions(this.commonAnnotationVisuals);
     }
 
+    get length() {
+        return this._presets.size;
+    }
+
     /**
      * Check if preset exists
      * @param {string} id preset id
      * @returns true if exists
      */
     exists(id) {
-        return this._presets.hasOwnProperty(id);
+        return this._presets.has(id);
     }
 
     /**
@@ -286,21 +291,21 @@ OSDAnnotations.PresetManager = class {
      * @returns {OSDAnnotations.Preset} preset instance
      */
     get(id = undefined) {
-        if (!id) {
-            for (const k in this._presets) {
-                if (Object.prototype.hasOwnProperty.call(this._presets, k)) return this._presets[k];
+        if (!id && this._presets.size > 0) {
+            if (this._presets.size > 1) {
+                return this._presets.values().next().value;
             }
             return this.unknownPreset;
         }
-        return this._presets[id];
+        return this._presets.get(id);
     }
 
     /**
      * Presets getter
-     * @returns {Array<any>} preset ids
+     * @returns {MapIterator<any>} preset ids
      */
     getExistingIds() {
-        return Object.keys(this._presets);
+        return this._presets.keys();
     }
 
     /**
@@ -321,7 +326,7 @@ OSDAnnotations.PresetManager = class {
      *   deletion was not possible (e.g. preset is used by existing annotations)
      */
     removePreset(id) {
-        let toDelete = this._presets[id];
+        let toDelete = this._presets.get(id);
         if (!toDelete) return false;
 
         if (this._context.fabric.canvas._objects.some(o => {
@@ -331,7 +336,7 @@ OSDAnnotations.PresetManager = class {
                 8000, Dialogs.MSG_WARN);
             return null;
         }
-        delete this._presets[id];
+        this._presets.delete(id);
         this._context.raiseEvent('preset-delete', {preset: toDelete});
         return toDelete;
     }
@@ -344,7 +349,7 @@ OSDAnnotations.PresetManager = class {
      * @return updated preset in case any value changed, undefined otherwise
      */
     updatePreset(id, properties) {
-        let preset = this._presets[id],
+        let preset = this._presets.get(id),
             needsRefresh = false;
         if (!preset) return undefined;
 
@@ -379,7 +384,7 @@ OSDAnnotations.PresetManager = class {
      * @return {string|undefined} the new meta id, undefined if no preset found
      */
     addCustomMeta(id, name, value) {
-        let preset = this._presets[id];
+        let preset = this._presets.get(id);
         if (!preset) return undefined;
         let key = "k"+Date.now();
         preset.meta[key] = {
@@ -397,7 +402,7 @@ OSDAnnotations.PresetManager = class {
      * @param {string} key meta key
      */
     deleteCustomMeta(id, key) {
-        let preset = this._presets[id];
+        let preset = this._presets.get(id);
         if (preset && preset.meta[key]) {
             delete preset.meta[key];
             this._context.raiseEvent('preset-meta-remove', {preset: preset, key: key});
@@ -436,9 +441,8 @@ OSDAnnotations.PresetManager = class {
      * @param {function} call
      */
     foreach(call) {
-        for (let id in this._presets) {
-            if (!this._presets.hasOwnProperty(id)) continue;
-            call(this._presets[id]);
+        for (const [key, value] of this._presets) {
+            call(value);
         }
     }
 
@@ -449,10 +453,7 @@ OSDAnnotations.PresetManager = class {
      */
     toObject(usedOnly=false) {
         let exported = [];
-        for (let preset in this._presets) {
-            if (!this._presets.hasOwnProperty(preset)) continue;
-            preset = this._presets[preset];
-
+        for (const [key, preset] in this._presets) {
             if (!usedOnly || this._context.fabric.canvas._objects.some(x => x.presetID === preset.presetID)) {
                 exported.push(preset.toJSONFriendlyObject());
             }
@@ -470,12 +471,11 @@ OSDAnnotations.PresetManager = class {
     async import(presets, clear=false) {
         const _this = this;
 
-        for (let pid in this._presets) {
-            const preset = this._presets[pid];
+        for (const [pid, preset] in this._presets) {
             // TODO: clear might remove presets that are attached to existing annotations!
             if (clear || this.isUnusedPreset(preset)) {
                 this._context.raiseEvent('preset-delete', {preset});
-                delete this._presets[pid];
+                this._presets.delete(pid);
             }
         }
 
@@ -485,26 +485,26 @@ OSDAnnotations.PresetManager = class {
 
         let first;
         if (Array.isArray(presets)) {
-            presets.map(p => OSDAnnotations.Preset.fromJSONFriendlyObject(p, _this._context)).forEach(p => {
-                if (!_this._presets.hasOwnProperty(p.presetID)) {
-                    _this._context.raiseEvent('preset-create', {preset: p});
-                    _this._presets[p.presetID] = p;
-                    _this._colorStep++; //generate new colors
+            for (let p of presets) {
+                p = OSDAnnotations.Preset.fromJSONFriendlyObject(p, _this._context);
+                if (!this._presets.has(p.presetID)) {
+                    this._context.raiseEvent('preset-create', {preset: p});
+                    this._presets.set(p.presetID, p);
+                    this._presetsImported = true;
+                    this._colorStep++; //generate new colors
                     if (!first) first = p;
                 }
-            });
+            }
         } else {
             throw "Invalid presets data provided as an input for import.";
         }
 
-        this._presetsImported = presets.length > 0;
-
         const leftPresetId = await this._context.cache.get('presets.left.id', undefined, false);
         const rightPresetId = await this._context.cache.get('presets.right.id', undefined, false);
-        if (leftPresetId && (leftPresetId === "__unset__" || this._presets[leftPresetId])) {
+        if (leftPresetId && (leftPresetId === "__unset__" || this._presets.get(leftPresetId))) {
             this.selectPreset(leftPresetId, true, false);
         }
-        if (rightPresetId && (rightPresetId === "__unset__" || this._presets[rightPresetId])) {
+        if (rightPresetId && (rightPresetId === "__unset__" || this._presets.get(rightPresetId))) {
             this.selectPreset(rightPresetId, false, false);
         }
 
@@ -523,8 +523,8 @@ OSDAnnotations.PresetManager = class {
     selectPreset(id, isLeftClick= true, cached= true) {
         let preset = undefined, cachedId = "__unset__";
         if (id) {
-            if (!this._presets[id]) return;
-            preset = this._presets[id];
+            if (!this._presets.has(id)) return;
+            preset = this._presets.get(id);
             cachedId = preset.presetID;
         }
         if (isLeftClick) {

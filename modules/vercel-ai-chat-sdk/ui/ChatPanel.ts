@@ -534,6 +534,10 @@ export class ChatPanel extends BaseComponent {
         return this._models.find((m) => m.id === this._modelId) || null;
     }
 
+    _getCurrentViewerContextId(): string | null {
+        return this.chat?.getActiveChatContextId?.() || null;
+    }
+
     refreshScriptConsent(): void {
         if (!this._settingsContentEl) return;
 
@@ -877,6 +881,12 @@ export class ChatPanel extends BaseComponent {
             this._sessionPicker?.setActiveSession(hydration.session.id);
             this._updateSessionTitle(hydration.session);
 
+            if (hydration.session.providerId && this.chatService.getProvider(hydration.session.providerId)) {
+                this._providerId = hydration.session.providerId;
+                if (this._providerSelectEl) this._providerSelectEl.value = hydration.session.providerId;
+                this._updateLoginButtonState();
+            }
+
             if (hydration.session.personalityId && this.chatService.getPersonality(hydration.session.personalityId)) {
                 this._personalityId = hydration.session.personalityId;
                 this.chatService.setPersonality(hydration.session.personalityId);
@@ -910,7 +920,10 @@ export class ChatPanel extends BaseComponent {
         const { showChatView = true } = options;
 
         const current = this.chatService.getActiveSessionId();
-        if (current) return current;
+        if (current) {
+            this.chatService.setSessionViewerContextId?.(current, this._getCurrentViewerContextId());
+            return current;
+        }
         if (!this._providerId) throw new Error("Select a provider first.");
 
         const modelId = this._modelId || this._models[0]?.id || (await this.chatService.listModels(this._providerId))[0]?.id;
@@ -921,6 +934,9 @@ export class ChatPanel extends BaseComponent {
             modelId,
             personalityId: this._personalityId,
             contextId: this.chatService.getProvider(this._providerId)?.contextId || null,
+            metadata: {
+                viewerContextId: this._getCurrentViewerContextId(),
+            },
         });
 
         this._modelId = session.modelId || modelId;
@@ -1050,12 +1066,13 @@ export class ChatPanel extends BaseComponent {
         try {
             const sessionId = await this._ensureActiveSession();
             const blob = await this._captureViewerScreenshotBlob();
+            const viewerContextId = this._getCurrentViewerContextId();
             const attachment = await this.chatService.uploadAttachment({
                 sessionId,
                 file: blob,
                 name: `viewer-screenshot-${new Date().toISOString().replace(/[:.]/g, "-")}.png`,
                 kind: "screenshot",
-                metadata: { source: "viewer" },
+                metadata: { source: "viewer", viewerContextId },
             });
             await this.chatService.attachUploadedFileAsMessage({ sessionId, attachment, role: "user" });
             this.addMessage(this._messageFromAttachment(attachment));
@@ -1127,7 +1144,7 @@ export class ChatPanel extends BaseComponent {
     }
 
     async _captureViewerScreenshotBlob(): Promise<Blob> {
-        const viewerContextId = this.chat?.getActiveChatContextId?.() || null;
+        const viewerContextId = this._getCurrentViewerContextId();
         const viewers = (globalThis as any).VIEWER_MANAGER?.viewers || [];
         const viewer = (viewerContextId
             ? viewers.find((candidate: any) => candidate?.uniqueId === viewerContextId)
@@ -1252,7 +1269,6 @@ export class ChatPanel extends BaseComponent {
                 try {
                     executionMessage = await chatModule.executeAssistantScript(script, { signal });
                     const failedScript =
-                        executionMessage?.role === "tool" &&
                         (executionMessage.parts || []).some((p: any) => p.type === "script-result" && p.ok === false);
 
                     if (failedScript) {

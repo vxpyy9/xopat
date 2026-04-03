@@ -1368,7 +1368,7 @@ export function initXOpatLoader(ENV: XOpatCoreConfig, PLUGINS: Record<string, XO
             if (!perHandler) return;
             if (perHandler.has(handler)) return; // idempotent
 
-            const record = { userData, priority, instances: new Set<OpenSeadragon.Viewer>() };
+            const record = { userData, priority, instances: new Set<IXOpatViewerSingleton>() };
             perHandler!.set(handler, record);
 
             // Attach immediately to instances that are already event sources
@@ -1415,14 +1415,14 @@ export function initXOpatLoader(ENV: XOpatCoreConfig, PLUGINS: Record<string, XO
          * Per-subclass state:
          * (Own property on the subclass, so subclasses don't share.)
          */
-        static __getBroadcastState(): Map<string, Map<OpenSeadragon.EventHandler<any>, { priority: number, userData: any, instances: Set<XOpatViewerSingleton> }>> {
+        static __getBroadcastState(): Map<string, Map<OpenSeadragon.EventHandler<any>, { priority: number, userData: any, instances: Set<IXOpatViewerSingleton> }>> {
             if (!Object.prototype.hasOwnProperty.call(this, "__broadcastState")) {
                 Object.defineProperty(this, "__broadcastState", {
                     value: new Map(),
                     writable: false, enumerable: false, configurable: false
                 });
             }
-            return (this as any).__broadcastState as Map<string, Map<OpenSeadragon.EventHandler<any>, { priority: number, userData: any, instances: Set<XOpatViewerSingleton> }>>;
+            return (this as any).__broadcastState as Map<string, Map<OpenSeadragon.EventHandler<any>, { priority: number, userData: any, instances: Set<IXOpatViewerSingleton> }>>;
         }
     }
 
@@ -3087,7 +3087,6 @@ form.submit();
                     viewer.addHandler(event, handler, hData.userData, hData.priority);
                 }
             }
-
 
             // let _lastScroll = Date.now(), _scrollCount = 0, _currentScroll;
             // /**

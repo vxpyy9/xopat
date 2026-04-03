@@ -331,18 +331,20 @@ First, get familiar with (sorted in importance order):
         - getting reference to _main_ tiled image, getting pixel size on screen,
     - WebGL module API of the layers group (accessible through `VIEWER.bridge`) for image data post-processing
     - events invoked on the VIEWER (always check `EVENTS.md` in appropriate folder)
+ - `window.VIEWER_MANAGER`
+    - manager for viewers
  - `window.USER_INTERFACE`
     - API for dealing with application UI - menus, tutorials, inserting custom HTML to DOM...
  - `window.UTILITIES`
     - functional API - exporting, downloading files, refreshing page and many other useful utilities
  - ``window.HTTPClient`` for seamless auth integration
- - Third party code (see below)    
- - `window.UIComponents`
-    - building blocks for HTML structures, deprecated
+    - Third party code (see below)
  - `window.APPLICATION_CONTEXT`
     - note that this interface is meant for inner logic and you probably do not need to access it
     - to access the configuration, should be used in read-only manner: `APPLICATION_CONTEXT.config`
     - to access the viewer parameters, use `[set|get]Option(...)` method
+ - ``window.LAYOUT`` 
+   - the main app layout
   
 And also other available modules. Each module provides it's own way of enriching the environment, 
 such as pre-defined color maps, (already mentioned) webgl processing, fabricJS canvas, JSON to HTML parser, 

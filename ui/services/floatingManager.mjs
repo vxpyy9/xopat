@@ -15,7 +15,7 @@ export class FloatingManager {
     constructor() {
         this._byToken = new WeakMap();     // token -> entry
         this._tokens = new Set();          // strong refs to tokens only
-        this._zTop = 1000;
+        this._zTop = 100;
 
         document.addEventListener("mousedown", (e) => { this._sweep(); this._handleOutside(e); }, true);
         VIEWER_MANAGER.broadcastHandler("canvas-press",  (e) => {
@@ -67,7 +67,7 @@ export class FloatingManager {
             elRef: new WeakRef(el),
             ownerRef: owner ? new WeakRef(owner) : undefined,
             onOutsideClick, onEscape,
-            z: ++this._zTop,
+            z: this._getZIndex(),
             clamp: this._normClamp(clamp),
         };
         el.style.zIndex = String(entry.z);
@@ -101,7 +101,7 @@ export class FloatingManager {
     bringToFront(token) {
         const e = this._byToken.get(token); if (!e) return;
         const el = e.elRef.deref(); if (!el) return;
-        el.style.zIndex = String(e.z = ++this._zTop);
+        el.style.zIndex = String(e.z = this._getZIndex());
     }
 
     /** Manual unregistration. Safe to call multiple times. */
@@ -326,5 +326,12 @@ export class FloatingManager {
             if (!e) { this._tokens.delete(token); continue; }
             if (!e.elRef.deref()) this.unregister(token);
         }
+    }
+
+    _getZIndex() {
+        if (this._zTop > 899) {
+            this._zTop = 100;
+        }
+        return this._zTop++;
     }
 }

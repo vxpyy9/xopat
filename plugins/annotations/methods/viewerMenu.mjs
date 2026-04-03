@@ -422,7 +422,7 @@ export const viewerMenuMethods = {
             }
         }
 
-        this.context.history.push(
+        APPLICATION_CONTEXT.history.push(
             () => {
                 this.context.enableAnnotations(nextEnabled);
                 this._updateViewerControls();

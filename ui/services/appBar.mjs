@@ -408,16 +408,33 @@ export class AppBar {
     Edit = {
         init(subMenu) {
             this.subMenu = subMenu;
+            this._localBusy = false;
 
             this.subMenu.addItem({
                 id: 'history-undo',
                 icon: 'fa-rotate-left',
                 label: $.t('main.bar.undo'),
                 disabled: true,
-                onClick: () => {
+                onClick: async () => {
                     const history = APPLICATION_CONTEXT.history;
-                    if (!history?.canUndo?.()) return true;
-                    history.undo();
+                    if (!history) return true;
+
+                    if (this._isBusy(history) || !history.canUndo?.()) {
+                        this.refresh();
+                        return true;
+                    }
+
+                    this._localBusy = true;
+                    this.refresh();
+
+                    try {
+                        await history.undo();
+                    } catch (e) {
+                        console.error("History undo failed.", e);
+                    } finally {
+                        this._localBusy = false;
+                        this.refresh();
+                    }
                     return true;
                 }
             });
@@ -427,32 +444,57 @@ export class AppBar {
                 icon: 'fa-rotate-right',
                 label: $.t('main.bar.redo'),
                 disabled: true,
-                onClick: () => {
+                onClick: async () => {
                     const history = APPLICATION_CONTEXT.history;
-                    if (!history?.canRedo?.()) return true;
-                    history.redo();
+                    if (!history) return true;
+
+                    if (this._isBusy(history) || !history.canRedo?.()) {
+                        this.refresh();
+                        return true;
+                    }
+
+                    this._localBusy = true;
+                    this.refresh();
+
+                    try {
+                        await history.redo();
+                    } catch (e) {
+                        console.error("History redo failed.", e);
+                    } finally {
+                        this._localBusy = false;
+                        this.refresh();
+                    }
                     return true;
                 }
             });
 
             const history = APPLICATION_CONTEXT.history;
-            if (history?.addHandler) {
+            if (history) {
                 const deferredRefresh = () => queueMicrotask(() => this.refresh());
 
                 history.addHandler('push', deferredRefresh);
                 history.addHandler('undo', deferredRefresh);
                 history.addHandler('redo', deferredRefresh);
+                history.addHandler('clear', deferredRefresh);
+                history.addHandler('error', deferredRefresh);
                 history.addHandler('register-provider', deferredRefresh);
+                history.addHandler('unregister-provider', deferredRefresh);
                 history.addHandler('change-size', deferredRefresh);
+                history.addHandler('history-busy-change', deferredRefresh);
             }
 
             this.refresh();
         },
 
+        _isBusy(history = APPLICATION_CONTEXT.history) {
+            return !!(this._localBusy || history?.isBusy?.());
+        },
+
         refresh() {
             const history = APPLICATION_CONTEXT.history;
-            const canUndo = !!history?.canUndo?.();
-            const canRedo = !!history?.canRedo?.();
+            const busy = this._isBusy(history);
+            const canUndo = !busy && !!history?.canUndo?.();
+            const canRedo = !busy && !!history?.canRedo?.();
 
             this.subMenu.setItemDisabled('history-undo', !canUndo);
             this.subMenu.setItemDisabled('history-redo', !canRedo);

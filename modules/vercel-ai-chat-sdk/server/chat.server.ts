@@ -442,9 +442,12 @@ function coerceMessageText(message: ChatMessage | null | undefined): string {
 }
 
 function normalizeIncomingMessage(message: ChatMessage): ChatMessage {
+    const normalizedRole = message.role === 'tool' ? 'user' : message.role;
+
     if (message.parts?.length) {
         return {
             ...message,
+            role: normalizedRole,
             content: message.content || coerceMessageText(message),
             createdAt: message.createdAt || new Date().toISOString(),
         };
@@ -452,12 +455,14 @@ function normalizeIncomingMessage(message: ChatMessage): ChatMessage {
     if (typeof message.content === 'string') {
         return {
             ...message,
+            role: normalizedRole,
             parts: [{ type: 'text', text: message.content }],
             createdAt: message.createdAt || new Date().toISOString(),
         };
     }
     return {
         ...message,
+        role: normalizedRole,
         parts: [],
         content: '',
         createdAt: message.createdAt || new Date().toISOString(),
@@ -478,8 +483,11 @@ function toModelMessage(
     attachmentIndex?: Map<string, ChatAttachmentRecord>,
     capabilities?: ModelCapabilities | null
 ) {
-    const role = message.role === 'tool' ? 'assistant' : message.role;
     const parts = message.parts || (message.content ? [{ type: 'text', text: message.content }] : []);
+    const hasMediaParts = parts.some((part: any) => part?.type === 'image' || part?.type === 'file');
+    const role = message.role === 'tool'
+        ? 'user'
+        : (message.role === 'assistant' && hasMediaParts ? 'user' : message.role);
 
     if (role === 'system') {
         return {
@@ -1017,11 +1025,23 @@ export async function sendTurn(ctx: any, input: SendTurnInput): Promise<ChatTurn
         contextId: session.contextId || null,
     });
 
-    const systemMessages = [
-        { role: 'system', content: sessionPreamble(runtime.instance.label, input.allowedScriptApi) },
-        { role: 'system', content: `Active personality: ${personality.label}\n\n${input.personalityPrompt || personality.systemPrompt}` },
-        { role: 'system', content: scriptSystemContent(input.allowedScriptApi) },
-    ].map((m) => toModelMessage(m as ChatMessage, attachmentIndex));
+    const mergedSystemContent = [
+        sessionPreamble(runtime.instance.label, input.allowedScriptApi),
+        `Active personality: ${personality.label}\n\n${input.personalityPrompt || personality.systemPrompt}`,
+        scriptSystemContent(input.allowedScriptApi),
+    ]
+        .map((x) => String(x || "").trim())
+        .filter(Boolean)
+        .join("\n\n---\n\n");
+
+    const systemMessages = mergedSystemContent
+        ? [toModelMessage({
+            role: "system",
+            content: mergedSystemContent,
+            parts: [{ type: "text", text: mergedSystemContent }],
+            createdAt: new Date().toISOString(),
+        } as ChatMessage, attachmentIndex)]
+        : [];
 
     const conversation = recentMessages.map((m) => toModelMessage(m, attachmentIndex, modelCaps.capabilities));
 

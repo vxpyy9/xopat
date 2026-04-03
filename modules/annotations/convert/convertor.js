@@ -245,7 +245,7 @@ OSDAnnotations.Convertor.IConvertor = class {
      * Options map, supported parameters, each option must be an object
      * that has:
      * {
-     *     type: "checkBox" //what GUI input type it maps to, see available in UIComponents.Elements
+     *     type: "checkBox" // todo docs
      *     default: default value
      *     ...possibly provide other properties, note that 'changed' property is handled automatically
      * }

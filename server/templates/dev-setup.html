@@ -278,8 +278,36 @@
                 </form>`
         );
 
-        if (typeof ShaderConfigurator !== 'undefined') {
-            ShaderConfigurator.buildShadersAndControlsDocs("documentation");
+        const shaderConfigurator = window.OpenSeadragon?.FlexRenderer?.ShaderConfigurator;
+
+        if (shaderConfigurator) {
+            // todo we should support relative paths - bug in the shader configurator
+            shaderConfigurator.setPreviewAssetBasePath("/src/libs/flex-renderer/assets");
+
+            const defaultPreview = {
+                file: "default.png",
+                alt: "Preview unavailable"
+            };
+
+            const originalBuildFallbackPreview =
+                shaderConfigurator._buildFallbackPreview.bind(shaderConfigurator);
+
+            shaderConfigurator._buildFallbackPreview = function(shaderMeta = {}) {
+                return this._normalizePreviewDefinition(defaultPreview, shaderMeta)
+                    || originalBuildFallbackPreview(shaderMeta);
+            };
+
+            const docsNode = document.getElementById('documentation');
+            docsNode.classList.remove('prose');
+            docsNode.classList.add('flex', 'flex-col', 'gap-6');
+
+            if (typeof shaderConfigurator.compileDocsModel === 'function'
+                && typeof shaderConfigurator.renderDocsPage === 'function') {
+                const docsModel = shaderConfigurator.compileDocsModel();
+                shaderConfigurator.renderDocsPage(docsNode, docsModel);
+            } else if (typeof shaderConfigurator.buildShadersAndControlsDocs === 'function') {
+                shaderConfigurator.buildShadersAndControlsDocs(docsNode);
+            }
         }
 
         $('#custom-request').on('submit', evt => {

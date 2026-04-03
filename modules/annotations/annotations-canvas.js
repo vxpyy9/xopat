@@ -191,6 +191,120 @@ OSDAnnotations.FabricWrapper = class extends XOpatViewerSingleton {
         this.canvas.requestRenderAll();
     }
 
+    _getImportSerializationProps() {
+        const props = this._exportedPropertiesGlobal(true);
+        props.push(...this.module._extraProps);
+        return Array.from(new Set(props));
+    }
+
+    _serializeAnnotationForImport(annotation, position = undefined) {
+        const data = annotation instanceof fabric.Object
+            ? annotation.toObject(this._getImportSerializationProps())
+            : $.extend(true, Array.isArray(annotation) ? [] : {}, annotation);
+
+        if (position !== undefined) {
+            data._position = position;
+        }
+        return data;
+    }
+
+    _normalizeImportState(input = {}, { includePresets = false } = {}) {
+        const objects = Array.isArray(input?.objects) ? input.objects : [];
+        const layers = Array.isArray(input?.layers) ? input.layers : [];
+
+        const state = {
+            objects: this.trimExportJSON(
+                objects.map(obj => this._serializeAnnotationForImport(obj, obj?._position))
+            ),
+            layers: layers
+                .map(layerData => {
+                    if (!layerData?.id) return null;
+
+                    const cloned = $.extend(true, {}, layerData);
+                    cloned.id = String(cloned.id);
+
+                    const layerObjects = Array.isArray(layerData._objects) ? layerData._objects : [];
+                    cloned._objects = this.trimExportJSON(
+                        layerObjects.map((obj, index) =>
+                            this._serializeAnnotationForImport(obj, obj?._position ?? index)
+                        )
+                    );
+
+                    return cloned;
+                })
+                .filter(Boolean)
+                .sort((a, b) => (a.position ?? 0) - (b.position ?? 0)),
+            activeLayerId:
+                input?.activeLayerId === undefined || input?.activeLayerId === null
+                    ? undefined
+                    : String(input.activeLayerId),
+        };
+
+        if (includePresets && Object.prototype.hasOwnProperty.call(input ?? {}, "presets")) {
+            state.presets = $.extend(
+                true,
+                Array.isArray(input.presets) ? [] : {},
+                input.presets
+            );
+        }
+
+        return state;
+    }
+
+    _captureImportState({ includePresets = false } = {}) {
+        const layers = this.getAllLayers()
+            .map(layer => {
+                const layerData = this._serializeLayer(String(layer.id));
+                if (!layerData) return null;
+
+                const layerObjects = (layer.getObjects?.() || []).map(obj =>
+                    this._serializeAnnotationForImport(
+                        obj,
+                        layer.getAnnotationIndex?.(obj)
+                    )
+                );
+
+                layerData._objects = this.trimExportJSON(layerObjects);
+                return layerData;
+            })
+            .filter(Boolean)
+            .sort((a, b) => (a.position ?? 0) - (b.position ?? 0));
+
+        const rootObjects = (this.canvas.getObjects?.() || [])
+            .filter(obj =>
+                this.isAnnotation(obj) &&
+                (obj.layerID === undefined || obj.layerID === null || String(obj.layerID) === "")
+            )
+            .map(obj =>
+                this._serializeAnnotationForImport(
+                    obj,
+                    this.getBoardItemIndex("annotation", obj.incrementId)
+                )
+            );
+
+        const state = {
+            objects: this.trimExportJSON(rootObjects),
+            layers,
+            activeLayerId: this.getActiveLayer()?.id,
+        };
+
+        if (includePresets) {
+            state.presets = this.module.presets.toObject();
+        }
+
+        return state;
+    }
+
+    async _applyImportState(state, { clear = false, inheritSession = true, restorePresets = false } = {}) {
+        const normalized = this._normalizeImportState(state, { includePresets: restorePresets });
+
+        if (restorePresets && Object.prototype.hasOwnProperty.call(normalized, "presets")) {
+            await this.module.presets.import(normalized.presets, true);
+        }
+
+        return this._loadObjects(normalized, clear, inheritSession);
+    }
+
     /**
      * Load annotation objects only, must keep the same structure that comes from 'toObject',
      * the load event should be preceded with preset load event
@@ -200,11 +314,38 @@ OSDAnnotations.FabricWrapper = class extends XOpatViewerSingleton {
      * @param inheritSession
      * @return Promise
      */
-    async loadObjects(annotations, clear=false, inheritSession=true) {
-        //todo allow for 'redo' history (once layers are introduced)
+    async loadObjects(annotations, clear = false, inheritSession = true, recordHistory = true) {
         if (!annotations.objects) throw "Annotations object must have 'objects' key with the annotation data.";
         if (!Array.isArray(annotations.objects)) throw "Annotation objects must be an array.";
-        return this._loadObjects(annotations, clear, inheritSession);
+
+        if (recordHistory === false) {
+            return this._loadObjects(annotations, clear, inheritSession);
+        }
+
+        const previousState = this._captureImportState();
+        const nextState = this._normalizeImportState(annotations);
+
+        return APPLICATION_CONTEXT.history.push(
+            () => APPLICATION_CONTEXT.history.withoutRecording(() =>
+                this._applyImportState(nextState, {
+                    clear,
+                    inheritSession,
+                    restorePresets: false,
+                })
+            ),
+            () => APPLICATION_CONTEXT.history.withoutRecording(() =>
+                this._applyImportState(previousState, {
+                    clear: true,
+                    inheritSession: true,
+                    restorePresets: false,
+                })
+            ),
+            {
+                type: "annotations.loadObjects",
+                viewerId: this.viewer?.uniqueId,
+                clear,
+            }
+        );
     }
 
     /**
@@ -221,10 +362,9 @@ OSDAnnotations.FabricWrapper = class extends XOpatViewerSingleton {
      * @param {boolean} clear erase state upon import
      * @return Promise(boolean) true if something was imported
      */
-    async import(data, options={}, clear=false) {
-        //todo allow for 'redo' history (once layers are introduced)
-
+    async import(data, options = {}, clear = false) {
         if (!options?.format) options.format = "native";
+        const trackHistory = options.history !== false;
 
         let toImport;
         try {
@@ -242,7 +382,7 @@ OSDAnnotations.FabricWrapper = class extends XOpatViewerSingleton {
                     console.log("Successfully parsed as", format);
                     break;
                 } catch (_e) {
-                    //pass
+                    // pass
                 }
             }
 
@@ -253,43 +393,102 @@ OSDAnnotations.FabricWrapper = class extends XOpatViewerSingleton {
 
         let imported = false;
         let inheritSession = options.inheritSession === undefined || options.inheritSession;
+        let affectsPresets = false;
+        let nextState = null;
 
-        // the import should happen in two stages, one that prepares the data and one that
-        // loads so that integrity is kept -> this is not probably a big issue since the only
-        // 'parsing' is done within preset import and it fails safely with exception in case of error
+        const emitImportEvent = (payload, clearState, extraOptions = {}) => {
+            this.module.raiseEvent('import', {
+                owner: this,
+                options: { ...options, ...extraOptions },
+                clear: clearState,
+                data: payload,
+            });
+        };
 
         if (Array.isArray(toImport) && toImport.length > 0) {
             imported = true;
-            //if no presets, maybe we are importing object array
-            await this._loadObjects({objects: toImport}, clear, inheritSession);
+            nextState = this._normalizeImportState({ objects: toImport });
         } else {
-            if (Array.isArray(toImport?.presets) && toImport.presets.length > 0) {
+            affectsPresets = Array.isArray(toImport?.presets) && toImport.presets.length > 0;
+            if (affectsPresets || (Array.isArray(toImport?.objects) && toImport.objects.length > 0)) {
                 imported = true;
-                await this.module.presets.import(toImport.presets, clear);
-            }
-            if (Array.isArray(toImport?.objects) && toImport.objects.length > 0) {
-                imported = true;
-                await this._loadObjects(toImport, clear, inheritSession);
+                nextState = this._normalizeImportState({
+                    objects: Array.isArray(toImport?.objects) ? toImport.objects : [],
+                    layers: Array.isArray(toImport?.layers) ? toImport.layers : [],
+                    activeLayerId: toImport?.activeLayerId,
+                    presets: affectsPresets ? toImport.presets : undefined,
+                }, { includePresets: affectsPresets });
             }
         }
 
-        if (imported) {
-            // todo event name/logic
+        if (!imported || !nextState) {
+            emitImportEvent(null, clear);
+            return false;
+        }
+
+        if (!trackHistory) {
+            await APPLICATION_CONTEXT.history.withoutRecording(() =>
+                this._applyImportState(nextState, {
+                    clear,
+                    inheritSession,
+                    restorePresets: affectsPresets,
+                })
+            );
+
             this.raiseEvent('annotation-loaded', {
                 viewer: this.viewer,
                 clear,
                 reason: 'import'
             });
+            emitImportEvent(nextState, clear, { fromHistory: false });
+            return true;
         }
 
-        this.module.raiseEvent('import', {
-            owner: this,
-            options: options,
-            clear: clear,
-            data: imported ? toImport : null,
-        });
+        const previousState = this._captureImportState({ includePresets: affectsPresets });
 
-        return imported;
+        await APPLICATION_CONTEXT.history.push(
+            () => APPLICATION_CONTEXT.history.withoutRecording(async () => {
+                await this._applyImportState(nextState, {
+                    clear,
+                    inheritSession,
+                    restorePresets: affectsPresets,
+                });
+
+                this.raiseEvent('annotation-loaded', {
+                    viewer: this.viewer,
+                    clear,
+                    reason: 'import'
+                });
+                emitImportEvent(nextState, clear, { fromHistory: false });
+                return true;
+            }),
+            () => APPLICATION_CONTEXT.history.withoutRecording(async () => {
+                await this._applyImportState(previousState, {
+                    clear: true,
+                    inheritSession: true,
+                    restorePresets: affectsPresets,
+                });
+
+                this.raiseEvent('annotation-loaded', {
+                    viewer: this.viewer,
+                    clear: true,
+                    reason: 'import-undo'
+                });
+                emitImportEvent(previousState, true, {
+                    fromHistory: true,
+                    historyDirection: 'undo'
+                });
+                return true;
+            }),
+            {
+                type: 'annotations.import',
+                viewerId: this.viewer?.uniqueId,
+                clear,
+                restorePresets: affectsPresets,
+            }
+        );
+
+        return true;
     }
 
 
@@ -643,7 +842,7 @@ OSDAnnotations.FabricWrapper = class extends XOpatViewerSingleton {
         id = String(id);
         let layerData = {id: id, _objects: []};
 
-        this.module.history.push(
+        return APPLICATION_CONTEXT.history.push(
             () => this._createLayer(layerData),
             () => {
                 layerData = this._serializeLayer(id);
@@ -659,7 +858,7 @@ OSDAnnotations.FabricWrapper = class extends XOpatViewerSingleton {
     deleteLayer(id) {
         const layerData = this._serializeLayer(id);
 
-        this.module.history.push(
+        return APPLICATION_CONTEXT.history.push(
             () => this._deleteLayer(id),
             () => this._createLayer(layerData)
         );
@@ -791,7 +990,7 @@ OSDAnnotations.FabricWrapper = class extends XOpatViewerSingleton {
         }
         targetAnnots.sort((a, b) => (a._position ?? 0) - (b._position ?? 0));
 
-        this.module.history.push(
+        APPLICATION_CONTEXT.history.push(
             () => targetAnnots.forEach(annot => this._deleteAnnotation(annot, _raise)),
             () => targetAnnots.forEach(annot => this._addAnnotation(annot, _raise))
         )
@@ -1131,7 +1330,7 @@ OSDAnnotations.FabricWrapper = class extends XOpatViewerSingleton {
             });
         } catch (e) { console.error('Error in annotation-before-create event handler: ', e); }
         if (cancelFlag) return false;
-        return this.module.history.push(
+        return APPLICATION_CONTEXT.history.push(
             () => this._promoteHelperAnnotation(annotation, _raise, _dangerousSkipHistory),
             () => this._deleteAnnotation(annotation, _raise)
         );
@@ -1256,7 +1455,7 @@ OSDAnnotations.FabricWrapper = class extends XOpatViewerSingleton {
         const before = !!layer.visible;
         const after = !before;
 
-        return this.module.history.push(
+        return APPLICATION_CONTEXT.history.push(
             () => this._setLayerVisibility(layer, after, _raise),
             () => this._setLayerVisibility(layer, before, _raise)
         );
@@ -1459,7 +1658,7 @@ OSDAnnotations.FabricWrapper = class extends XOpatViewerSingleton {
      * @return {boolean} true if annotation was added
      */
     addAnnotation(annotation, _raise=true) {
-        return this.module.history.push(
+        return APPLICATION_CONTEXT.history.push(
             () => this._addAnnotation(annotation, _raise),
             () => this._deleteAnnotation(annotation, _raise)
         );
@@ -1513,7 +1712,7 @@ OSDAnnotations.FabricWrapper = class extends XOpatViewerSingleton {
      * @return {boolean} true if annotation was deleted
      */
     deleteAnnotation(annotation, _raise=true) {
-        this.module.history.push(
+        return APPLICATION_CONTEXT.history.push(
             () => this._deleteAnnotation(annotation, _raise),
             () => this._addAnnotation(annotation, _raise),
         );
@@ -1655,7 +1854,7 @@ OSDAnnotations.FabricWrapper = class extends XOpatViewerSingleton {
             this._promoteHelperAnnotation(next, false, true);
         }
 
-        return this.module.history.push(
+        return APPLICATION_CONTEXT.history.push(
             () => this._replaceAnnotation(previous, next, true),
             () => this._replaceAnnotation(next, previous, true)
         );
@@ -1925,7 +2124,7 @@ OSDAnnotations.FabricWrapper = class extends XOpatViewerSingleton {
         this.clearLayerSelection?.(true);
         this.clearAnnotationSelection?.(true);
 
-        this.module.history.push(
+        APPLICATION_CONTEXT.history.push(
             () => {
                 for (const item of [...combined].reverse()) {
                     if (item.type === "annotation") {
@@ -2180,7 +2379,12 @@ OSDAnnotations.FabricWrapper = class extends XOpatViewerSingleton {
                 return;
             }
             _this.module.cursor.mouseTime = Date.now();
-            let factory = _this.module.presets.left ? _this.module.presets.left.objectFactory : undefined;
+            let preset = _this.module.presets.left;
+            if (!preset && _this.module._provideDefaultPresets && _this.module.presets.length === 0) {
+                preset = _this.module.presets.addPreset('unknown', 'Unknown', '#898989');
+                _this.module.presets.selectPreset('unknown');
+            }
+            let factory = preset ? preset.objectFactory : undefined;
             let point = screenToPixelCoords(event.x, event.y);
             _this.module.mode.handleClickDown(event, point, true, factory);
             // set after handleClickDown -> viewerLocked will be set to false by default after we set isDown to true
@@ -2452,83 +2656,120 @@ OSDAnnotations.FabricWrapper = class extends XOpatViewerSingleton {
     _loadObjects(input, clear, inheritSession = false) {
         const _this = this.canvas, self = this;
 
-        const fabricObjects = [];
+        if (!input.objects) throw "Annotation objects must have 'objects' key with the annotation data.";
+        if (!Array.isArray(input.objects)) throw "Annotation objects must be an array.";
+
+        const zoom = this.canvas.computeGraphicZoom(this.viewer.viewport);
+        const graphicZoom = this.canvas.computeGraphicZoom(this.viewer.viewport) / zoom;
+
+        const annotations = input.objects.map(o => $.extend(true, {}, o));
         const nonFabricObjects = [];
-        for (let obj of input.objects) {
-            if (obj instanceof fabric.Object) {
+        const fabricObjects = [];
+
+        annotations.forEach(obj => {
+            const factory = self.module.getAnnotationObjectFactory(obj.factoryID || obj.type);
+            if (!factory) {
+                console.warn("Unknown annotation factory during load, skipping object.", obj);
+                return;
+            }
+
+            if (factory.fabricStructure()) {
                 fabricObjects.push(obj);
             } else {
-                const factory = this.module.getAnnotationObjectFactory(obj.factoryID);
-                if (!factory) continue;
-                factory.initializeBeforeImport(obj);
                 nonFabricObjects.push(obj);
             }
-        }
+        });
 
-        const zoom = this.canvas.getZoom();
-        const graphicZoom = this.canvas.computeGraphicZoom(zoom);
+        return new Promise((resolve, reject) => {
+            fabric.util.enlivenObjects(nonFabricObjects, objects => {
+                try {
+                    if (clear) {
+                        this.canvas.clear();
+                        this.clearBoardOrder();
+                        this._layers = {};
+                        this._layer = undefined;
+                        this.clearAnnotationSelection(true);
+                        this.clearLayerSelection(true);
+                    }
 
-        return fabric.util.enlivenObjects(nonFabricObjects, objects => {
-            if (clear) {
-                this.canvas.clear();
-                this.clearBoardOrder();
-                this._layers = {};
-                this._layer = undefined;
-                this.clearAnnotationSelection(true);
-                this.clearLayerSelection(true);
-            }
+                    const explicitLayers = Array.isArray(input?.layers) ? [...input.layers] : [];
+                    explicitLayers
+                        .sort((a, b) => (a?.position ?? 0) - (b?.position ?? 0))
+                        .forEach(layerData => {
+                            if (!layerData?.id) return;
+                            const id = String(layerData.id);
+                            if (self.getLayer(id)) return;
 
-            let insertion = 0;
-            const touchedLayers = new Set();
+                            self._createLayer({
+                                ...$.extend(true, {}, layerData),
+                                id,
+                                _objects: []
+                            });
+                        });
 
-            function initObject(obj) {
-                if (inheritSession && !obj.sessionID) {
-                    obj.sessionID = self.module.session;
+                    let insertion = 0;
+                    const touchedLayers = new Set();
+
+                    function initObject(obj) {
+                        if (inheritSession && !obj.sessionID) {
+                            obj.sessionID = self.module.session;
+                        }
+
+                        self.checkLayer(obj);
+                        self.module.checkAnnotation(obj, zoom, graphicZoom);
+                        _this.insertAt(obj, insertion++);
+
+                        const hasLayer =
+                            obj.hasOwnProperty('layerID') &&
+                            obj.layerID !== undefined &&
+                            obj.layerID !== null &&
+                            String(obj.layerID) !== '';
+
+                        if (hasLayer) {
+                            const layerId = String(obj.layerID);
+                            obj.layerID = layerId;
+
+                            const layerIndex = obj.hasOwnProperty('_position') ? obj._position : undefined;
+                            self._addAnnotationToLayer(obj, layerIndex);
+                            touchedLayers.add(layerId);
+                        } else {
+                            obj.layerID = undefined;
+
+                            const boardIndex = obj.hasOwnProperty('_position') ? obj._position : undefined;
+                            self.upsertBoardItem('annotation', obj.incrementId, boardIndex);
+                        }
+                    }
+
+                    for (let obj of objects) {
+                        initObject(obj);
+                    }
+
+                    for (let obj of fabricObjects) {
+                        initObject(obj);
+                    }
+
+                    self.module.assignAnnotationIds(_this.getObjects());
+
+                    if (input?.activeLayerId !== undefined && input?.activeLayerId !== null) {
+                        self.setActiveLayer(String(input.activeLayerId));
+                    } else if (clear) {
+                        self.unsetActiveLayer();
+                    }
+
+                    touchedLayers.forEach(layerId => {
+                        self.raiseEvent('layer-objects-changed', { layerId: String(layerId) });
+                    });
+
+                    self.raiseEvent('annotation-loaded', {
+                        viewer: self.viewer,
+                        clear,
+                        reason: 'load-objects'
+                    });
+
+                    resolve(true);
+                } catch (e) {
+                    reject(e);
                 }
-
-                self.checkLayer(obj);
-                self.module.checkAnnotation(obj, zoom, graphicZoom);
-                _this.insertAt(obj, insertion++);
-
-                const hasLayer =
-                    obj.hasOwnProperty('layerID') &&
-                    obj.layerID !== undefined &&
-                    obj.layerID !== null &&
-                    String(obj.layerID) !== '';
-
-                if (hasLayer) {
-                    const layerId = String(obj.layerID);
-                    obj.layerID = layerId;
-
-                    const layerIndex = obj.hasOwnProperty('_position') ? obj._position : undefined;
-                    self._addAnnotationToLayer(obj, layerIndex);
-                    touchedLayers.add(layerId);
-                } else {
-                    obj.layerID = undefined;
-
-                    const boardIndex = obj.hasOwnProperty('_position') ? obj._position : undefined;
-                    self.upsertBoardItem('annotation', obj.incrementId, boardIndex);
-                }
-            }
-
-            for (let obj of objects) {
-                initObject(obj);
-            }
-
-            for (let obj of fabricObjects) {
-                initObject(obj);
-            }
-
-            self.module.assignAnnotationIds(_this.getObjects());
-
-            touchedLayers.forEach(layerId => {
-                self.raiseEvent('layer-objects-changed', { layerId: String(layerId) });
-            });
-
-            self.raiseEvent('annotation-loaded', {
-                viewer: self.viewer,
-                clear,
-                reason: 'load-objects'
             });
         });
     }

@@ -139,31 +139,129 @@ interface HistoryProviderConstructor {
 
 interface HistoryProvider {
     readonly importance: number;
-    undo(): boolean;
-    redo(): boolean;
+    undo(): Promise<boolean>;
+    redo(): Promise<boolean>;
     canUndo(): boolean;
     canRedo(): boolean;
 }
 
 // ── XOpatHistory ─────────────────────────────────────────────────────────────
+type HistoryMeta = Record<string, any>;
+
+interface HistoryProviderConstructor {
+    new(): HistoryProvider;
+}
+
+interface HistoryProvider {
+    readonly importance: number;
+    undo(): Promise<boolean>;
+    redo(): Promise<boolean>;
+    canUndo(): boolean;
+    canRedo(): boolean;
+    reset?(): Promise<void>;
+}
+
 interface XOpatHistoryConstructor {
     new(size?: number): XOpatHistory;
 }
 
-interface XOpatHistory {
+interface XOpatHistory extends OpenSeadragon.EventSource {
     BUFFER_LENGTH: number;
-    _buffer: Array<{ forward: () => any; backward: () => void } | null>;
+    _buffer: Array<{ forward: () => any; backward: () => any; meta?: HistoryMeta } | null>;
     _buffidx: number;
     _lastValidIndex: number;
     _providers: HistoryProvider[];
+    _recordingDepth: number;
+    _queue: Promise<any>;
+    _busyCount: number;
+    _queuedCount: number;
 
     set size(value: number);
-    registerProvider(provider: HistoryProvider): void;
-    push(forward: () => any, backward: () => void): any;
-    undo(): void;
-    redo(): void;
+
+    registerProvider(provider: HistoryProvider): () => boolean;
+    unregisterProvider(provider: HistoryProvider): boolean;
+
+    hasStackUndo(): boolean;
+    hasStackRedo(): boolean;
+    hasAnyStackHistory(): boolean;
+
+    clear(options?: {
+        resetProviders?: boolean;
+        reason?: string;
+        [key: string]: any;
+    }): Promise<void>;
+
+    push(
+        forward: () => any,
+        backward: () => any,
+        meta?: HistoryMeta
+    ): Promise<any>;
+
+    pushExecuted(
+        forward: () => any,
+        backward: () => any,
+        meta?: HistoryMeta
+    ): Promise<void>;
+
+    readonly isRecordingEnabled: boolean;
+    withoutRecording<T>(operation: () => Promise<T> | T): Promise<T>;
+
+    undo(): Promise<boolean>;
+    redo(): Promise<boolean>;
     canUndo(): boolean;
     canRedo(): boolean;
+
+    isBusy(): boolean;
+    pendingCount(): number;
+    whenIdle(): Promise<void>;
+}
+
+interface ApplicationContext {
+    config: ApplicationContextConfig;
+    AppCache: any;
+    AppCookies: any;
+    Scripting: any;
+    httpClient: any;
+    history: XOpatHistory;
+    readonly sessionName: string;
+    readonly secure: boolean;
+    readonly env: any;
+    readonly url: string;
+    readonly settingsMenuId: string;
+    readonly pluginsMenuId: string;
+    getOption(name: string, defaultValue?: any, cache?: boolean, parse?: boolean): any;
+    setOption(name: string, value: any, cache?: boolean): void;
+    setDirty(): void;
+    pluginIds(): string[];
+    activePluginIds(): string[];
+    referencedName(stripSuffix?: boolean): string | undefined;
+    referencedId(): string;
+    activeVisualizationConfig(): VisualizationItem | undefined;
+    registerConfig(bg: BackgroundItem): BackgroundConfig;
+    sameBackground(a: BackgroundItem | BackgroundConfig, b: BackgroundItem | BackgroundConfig): boolean;
+    generateID(seed: string): string;
+    serializeApp(withCookies?: boolean, staticPreview?: boolean): any;
+    prepareRendering(): void;
+    beginApplicationLifecycle(data: DataID[], background: BackgroundItem[], visualizations?: VisualizationItem[]): Promise<void>;
+    openViewerWith(
+        data?: DataID[],
+        background?: BackgroundItem[],
+        visualizations?: VisualizationItem[],
+        bgSpec?: number | number[] | null,
+        vizSpec?: number | number[] | null,
+        opts?: {
+            deriveOverlayFromBackgroundGoals?: boolean;
+            historyMode?: "auto" | "skip" | "visualization-step" | "content-switch" | "reset-history";
+            fromHistory?: boolean;
+            preserveHistoryOnBackgroundChange?: boolean;
+            warnOnHistoryBoundary?: boolean;
+            historyLabel?: string;
+        }
+    ): Promise<boolean>;
+    updateVisualization(visualizations: VisualizationItem[], newData?: DataID[], activeVizIndex?: number | number[]): Promise<boolean>;
+    _dangerouslyAccessConfig(): any;
+    _dangerouslyAccessPlugin(id: string): any;
+    __cache: { dirty: boolean };
 }
 
 // ── APPLICATION_CONTEXT ───────────────────────────────────────────────────────

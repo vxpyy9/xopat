@@ -20,9 +20,16 @@ addPlugin('slide-info', class extends XOpatPlugin {
             try {
                 const mainTiledImage = viewer.world.getItemAt(0);
                 let metadata = mainTiledImage?.source.getMetadata();
-                if (metadata) {
+                if (metadata !== undefined && metadata !== null) {
                     metadata = metadata.info || metadata;
                     result.page = Array.isArray(metadata) ? metadata : [metadata];
+                }
+
+                if (!result.page?.length) {
+                    result.page = [{
+                        title: "No metadata available",
+                        description: "This slide source did not expose any metadata for the information panel."
+                    }];
                 }
             } catch (e) {
                 console.error('Failed to load slide meta for slide viewer', viewer, e);

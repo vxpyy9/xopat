@@ -30,6 +30,8 @@
     "storeCacheSnapshots": true,
     // Whether to include private annotations in module export
     "exportPrivate" : false,
+    // If default preset should be provided
+    "provideDefaultPresets": true,
     //Arguments to format convertors
     "convertors": {
         "format": "native",

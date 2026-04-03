@@ -106,7 +106,9 @@
         "settings": "Settings",
         "staticFileExplain": "This browser was opened from a shared file. Changes are not being saved.",
         "viewerSidebars": "Viewer Side Menus",
-        "viewerToolbars": "Tool Bars"
+        "viewerToolbars": "Tool Bars",
+        "undo": "Undo {{action}}",
+        "redo": "Redo {{action}}"
       }
     },
     "messages": {

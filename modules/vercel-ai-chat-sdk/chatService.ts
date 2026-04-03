@@ -22,7 +22,12 @@ export class ChatService {
     _getAllowedScriptApi: (() => AllowedScriptApiManifest | undefined) | undefined;
     _serverFactory: (() => RpcScope) | undefined;
     _activeSessionId: string | null;
-    _sessionState: Map<string, { syncedCount: number; providerId: string }>;
+    _sessionState: Map<string, {
+        syncedCount: number;
+        providerId: string;
+        providerContextId?: string | null;
+        viewerContextId?: string | null;
+    }>;
     _modelCatalog: Map<string, ChatProviderModelInfo[]>;
     _activeTurnAbortController: AbortController | null;
 
@@ -144,27 +149,6 @@ export class ChatService {
         return this._providers.get(providerId);
     }
 
-    getProviderContextId(providerId?: string | null): string | null {
-        if (!providerId) return null;
-        const raw = this.getProvider(providerId)?.contextId;
-        const contextId = typeof raw === 'string' ? raw.trim() : '';
-        return contextId || null;
-    }
-
-    getSessionProviderId(sessionId?: string | null): string | null {
-        const resolvedSessionId = sessionId || this._activeSessionId;
-        if (!resolvedSessionId) return null;
-        return this._sessionState.get(resolvedSessionId)?.providerId || null;
-    }
-
-    getSessionContextId(sessionId?: string | null): string | null {
-        return this.getProviderContextId(this.getSessionProviderId(sessionId));
-    }
-
-    getActiveContextId(): string | null {
-        return this.getSessionContextId(this._activeSessionId);
-    }
-
     async deleteProvider(providerId: string): Promise<void> {
         await this._server().deleteProvider!({ providerId });
         this._providers.delete(providerId);
@@ -246,42 +230,9 @@ export class ChatService {
         this._activeSessionId = sessionId;
     }
 
-    async createSession(input: CreateSessionInput): Promise<ChatSession> {
-        const personality = input.personalityId ? this._personalities.get(input.personalityId) : this.getCurrentPersonality();
-        const session = await this._server().createSession!({
-            ...input,
-            personalityId: input.personalityId ?? this._currentPersonalityId,
-            personalityPrompt: input.personalityPrompt ?? personality?.systemPrompt ?? null,
-        });
-        if (session.providerId && session.modelId) {
-            try {
-                await this.ensureModelCapabilities(session.providerId, session.modelId);
-            } catch (error) {
-                console.warn('Failed to ensure model capabilities:', error);
-            }
-        }
-        this._activeSessionId = session.id;
-        this._sessionState.set(session.id, { syncedCount: 0, providerId: session.providerId });
-        return session;
-    }
-
     async listSessions(providerId?: string): Promise<ChatSession[]> {
         const result = await this._server().listSessions!({ providerId: providerId || null });
         return result?.sessions || [];
-    }
-
-    async loadSession(sessionId: string): Promise<ChatSessionHydration> {
-        const hydration = await this._server().getSession!({ sessionId, hydrateMessages: true });
-        console.log('hydration', hydration);
-        this._activeSessionId = hydration.session.id;
-        this._sessionState.set(hydration.session.id, {
-            syncedCount: Array.isArray(hydration.messages) ? hydration.messages.length : 0,
-            providerId: hydration.session.providerId,
-        });
-        return {
-            ...hydration,
-            messages: (hydration.messages || []).map((m: ChatMessage) => ({ ...m, createdAt: ensureDate(m.createdAt) })),
-        };
     }
 
     async renameSession(sessionId: string, title: string): Promise<ChatSession> {
@@ -377,20 +328,6 @@ export class ChatService {
         }]);
     }
 
-    async appendMessages(sessionId: string, messages: ChatMessage[]): Promise<ChatMessage[]> {
-        const normalized = messages.map((m) => ({
-            ...m,
-            createdAt: ensureDate(m.createdAt),
-            parts: m.parts || (typeof m.content === 'string' ? [{ type: 'text', text: m.content }] : []),
-            content: typeof m.content === 'string' ? m.content : undefined,
-        }));
-        const result = await this._server().appendMessages!({ sessionId, messages: normalized });
-        const state = this._sessionState.get(sessionId);
-        const nextCount = (state?.syncedCount || 0) + normalized.length;
-        this._sessionState.set(sessionId, { syncedCount: nextCount, providerId: state?.providerId || '' });
-        return (result?.messages || []).map((m: ChatMessage) => ({ ...m, createdAt: ensureDate(m.createdAt) }));
-    }
-
     async sendTurn(options?: {
         sessionId?: string | null;
         providerId?: string | null;
@@ -437,8 +374,23 @@ export class ChatService {
             }
         }
 
-        const state = this._sessionState.get(sessionId) || { syncedCount: 0, providerId: result?.session?.providerId || '' };
-        this._sessionState.set(sessionId, { ...state, syncedCount: state.syncedCount + 1 });
+        const state = this._sessionState.get(sessionId) || {
+            syncedCount: 0,
+            providerId: result?.session?.providerId || '',
+            providerContextId: result?.session?.contextId || null,
+            viewerContextId: typeof result?.session?.metadata?.viewerContextId === 'string'
+                ? result.session.metadata.viewerContextId
+                : null,
+        };
+        this._sessionState.set(sessionId, {
+            ...state,
+            providerId: result?.session?.providerId || state.providerId || '',
+            providerContextId: result?.session?.contextId || state.providerContextId || null,
+            viewerContextId: (typeof result?.session?.metadata?.viewerContextId === 'string'
+                ? result.session.metadata.viewerContextId
+                : state.viewerContextId) || null,
+            syncedCount: state.syncedCount + 1,
+        });
 
         const message = result?.message || result;
         return {
@@ -516,5 +468,137 @@ export class ChatService {
             reader.onload = () => resolve(String(reader.result || ''));
             reader.readAsDataURL(blob);
         });
+    }
+
+    _normalizeContextId(value: unknown): string | null {
+        const trimmed = typeof value === "string" ? value.trim() : "";
+        return trimmed || null;
+    }
+
+    getProviderRuntimeContextId(providerId?: string | null): string | null {
+        if (!providerId) return null;
+        return this._normalizeContextId(this.getProvider(providerId)?.contextId);
+    }
+
+    getProviderContextId(providerId?: string | null): string | null {
+        return this.getProviderRuntimeContextId(providerId);
+    }
+
+    getSessionProviderRuntimeContextId(sessionId?: string | null): string | null {
+        const resolvedSessionId = sessionId || this._activeSessionId;
+        if (!resolvedSessionId) return null;
+
+        const state = this._sessionState.get(resolvedSessionId);
+        const fromState = this._normalizeContextId(state?.providerContextId);
+        if (fromState) return fromState;
+
+        return this.getProviderRuntimeContextId(state?.providerId || null);
+    }
+
+    getActiveProviderRuntimeContextId(): string | null {
+        return this.getSessionProviderRuntimeContextId(this._activeSessionId);
+    }
+
+    getSessionProviderContextId(sessionId?: string | null): string | null {
+        return this.getSessionProviderRuntimeContextId(sessionId);
+    }
+
+    getActiveProviderContextId(): string | null {
+        return this.getActiveProviderRuntimeContextId();
+    }
+
+    getSessionViewerContextId(sessionId?: string | null): string | null {
+        const resolvedSessionId = sessionId || this._activeSessionId;
+        if (!resolvedSessionId) return null;
+
+        const state = this._sessionState.get(resolvedSessionId);
+        return this._normalizeContextId(state?.viewerContextId);
+    }
+
+    getActiveViewerContextId(): string | null {
+        return this.getSessionViewerContextId(this._activeSessionId);
+    }
+
+    setSessionViewerContextId(sessionId: string, viewerContextId: string | null): void {
+        const state = this._sessionState.get(sessionId);
+        if (!state) return;
+
+        this._sessionState.set(sessionId, {
+            ...state,
+            viewerContextId: this._normalizeContextId(viewerContextId),
+        });
+    }
+
+    async createSession(input: CreateSessionInput): Promise<ChatSession> {
+        const personality = input.personalityId ? this._personalities.get(input.personalityId) : this.getCurrentPersonality();
+        const session = await this._server().createSession!({
+            ...input,
+            personalityId: input.personalityId ?? this._currentPersonalityId,
+            personalityPrompt: input.personalityPrompt ?? personality?.systemPrompt ?? null,
+        });
+
+        if (session.providerId && session.modelId) {
+            try {
+                await this.ensureModelCapabilities(session.providerId, session.modelId);
+            } catch (error) {
+                console.warn("Failed to ensure model capabilities:", error);
+            }
+        }
+
+        this._activeSessionId = session.id;
+        this._sessionState.set(session.id, {
+            syncedCount: 0,
+            providerId: session.providerId,
+            providerContextId: this._normalizeContextId(session.contextId)
+                || this.getProviderRuntimeContextId(session.providerId),
+            viewerContextId: this._normalizeContextId(session.metadata?.viewerContextId),
+        });
+
+        return session;
+    }
+
+    async loadSession(sessionId: string): Promise<ChatSessionHydration> {
+        const hydration = await this._server().getSession!({ sessionId, hydrateMessages: true });
+
+        this._activeSessionId = hydration.session.id;
+        this._sessionState.set(hydration.session.id, {
+            syncedCount: Array.isArray(hydration.messages) ? hydration.messages.length : 0,
+            providerId: hydration.session.providerId,
+            providerContextId: this._normalizeContextId(hydration.session.contextId)
+                || this.getProviderRuntimeContextId(hydration.session.providerId),
+            viewerContextId: this._normalizeContextId(hydration.session.metadata?.viewerContextId),
+        });
+
+        return {
+            ...hydration,
+            messages: (hydration.messages || []).map((m: ChatMessage) => ({
+                ...m,
+                createdAt: ensureDate(m.createdAt),
+            })),
+        };
+    }
+
+    async appendMessages(sessionId: string, messages: ChatMessage[]): Promise<ChatMessage[]> {
+        const normalized = messages.map((m) => ({
+            ...m,
+            createdAt: ensureDate(m.createdAt),
+            parts: m.parts || (typeof m.content === "string" ? [{ type: "text", text: m.content }] : []),
+            content: typeof m.content === "string" ? m.content : undefined,
+        }));
+
+        const result = await this._server().appendMessages!({ sessionId, messages: normalized });
+
+        const state = this._sessionState.get(sessionId);
+        const nextCount = (state?.syncedCount || 0) + normalized.length;
+
+        this._sessionState.set(sessionId, {
+            ...(state || { providerId: "" }),
+            syncedCount: nextCount,
+        });
+
+        return (result?.messages || []).map((m: ChatMessage) => ({
+            ...m,
+            createdAt: ensureDate(m.createdAt),
+        }));
     }
 }

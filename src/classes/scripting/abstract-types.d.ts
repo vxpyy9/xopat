@@ -13,10 +13,12 @@ export type ScriptApiObject = {
 
 export type HostScriptContext = Pick<
     ScriptingContextState,
-    "id" | "label" | "metadata" | "activeViewerContextId"
+    "id" | "label" | "metadata" | "activeViewerContextId" | "bypassConsentDialog"
 > & {
     getActiveViewerContextId(): string | null;
     setActiveViewerContextId(contextId: string | null | undefined): unknown;
+    isConsentDialogBypassed(): boolean;
+    setBypassConsentDialog(value: boolean): unknown;
 };
 
 export type ScriptApiInvocationContext = {
@@ -53,6 +55,7 @@ export type ScriptingContextState = {
     label?: string;
     metadata?: Record<string, unknown>;
     activeViewerContextId?: string | null;
+    bypassConsentDialog?: boolean;
     workerIds: string[];
     createdAt: number;
     lastUsedAt: number;

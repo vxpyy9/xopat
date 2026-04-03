@@ -11,6 +11,7 @@ import { HttpClient } from "./classes/http-client";
 import { initXOpatLoader } from "./loader";
 import { InvertedWeakMap } from "./external/data-structures";
 import { ScriptingManager } from "./classes/scripting-manager";
+import { XOpatHistory } from "./classes/history";
 
 // Functions defined in runtime-loaded scripts — declared here for type-check only (todo retype files to TS, replace with imports)
 declare function initXOpatUI(): void;
@@ -466,14 +467,14 @@ export function initXOpat(PLUGINS: Record<string, XOpatElementItem>, MODULES: Re
     };
 
     // todo make sure our globals dont get out of hand...
-    window.LAYOUT = new UI.MainLayout({
+    (window as any).LAYOUT = new UI.MainLayout({
         id: "viewer-container",
         position: "right",
         initialWidth: 360,
         collapseBreakpointPx: APPLICATION_CONTEXT.getOption("maxMobileWidthPx", null),
     });
     // Attach once (replaces your static HTML wrapper)
-    (window.LAYOUT as any).attachTo(document.getElementById("middle-container"));
+    (window as any).LAYOUT.attachTo(document.getElementById("middle-container"));
 
 
     initXOpatUI();
@@ -845,7 +846,7 @@ export function initXOpat(PLUGINS: Record<string, XOpatElementItem>, MODULES: Re
         } else {
             // When derive flag is ON, derive overlays from per-background goalIndex,
             // regardless of whether vizSpec is provided or undefined.
-            let desiredActiveVis;
+            let desiredActiveVis: undefined | (number | undefined)[] | number;
             if (deriveOverlayFromBackgroundGoals) {
                 desiredActiveVis = deriveVisFromGoals(bgIndicesForViz);
             } else if (vizSpec !== undefined) {
@@ -867,7 +868,7 @@ export function initXOpat(PLUGINS: Record<string, XOpatElementItem>, MODULES: Re
                 if (selectedBgArray.length > 0) {
                     if (Array.isArray(desiredActiveVis)) {
                         selectedBgArray.forEach((bgIdx, i) => {
-                            const ov = desiredActiveVis[i];
+                            const ov = (desiredActiveVis as Array<number>)[i];
                             if (ov === undefined) return;
                             const b = backgrounds[bgIdx];
                             if (!b) return;
@@ -1181,7 +1182,7 @@ export function initXOpat(PLUGINS: Record<string, XOpatElementItem>, MODULES: Re
             function loadPluginAwaits(pid: string, hasParams: boolean) {
                 return new Promise<void>((resolve) => {
                     UTILITIES.loadPlugin(pid, resolve);
-                    if (!hasParams) {
+                    if (!hasParams && CONFIG.plugins) {
                         //todo consider doing this automatically
                         CONFIG.plugins[pid] = {};
                     }
@@ -1190,7 +1191,7 @@ export function initXOpat(PLUGINS: Record<string, XOpatElementItem>, MODULES: Re
 
             const pluginKeys = APPLICATION_CONTEXT.AppCookies.get('_plugins', '').split(',') || [];
             for (let pid in PLUGINS) {
-                const hasParams = !!CONFIG.plugins[pid];
+                const hasParams = !!CONFIG.plugins?.[pid];
                 const plugin = PLUGINS[pid]!;
                 if (
                     (plugin.loaded && !plugin.instance) ||  // load plugin if loaded=true but instance not set
@@ -1247,13 +1248,6 @@ export function initXOpat(PLUGINS: Record<string, XOpatElementItem>, MODULES: Re
      * - Calls UTILITIES.parseBackgroundAndGoal to resolve background/overlay selections.
      * - With multiple backgrounds selected, creates multiple viewers (one per bg).
      *
-     @param {Array|undefined} data
-     @param {Array|undefined} background
-     @param {Array|undefined} visualizations
-     @param {number|number[]|undefined|null} bgSpec
-     @param {number|number[]|undefined|null} vizSpec
-     @param {Object} [opts]
-     @param {boolean} [opts.deriveOverlayFromBackgroundGoals]
      */
     APPLICATION_CONTEXT.openViewerWith = async function (
         data = undefined,
@@ -1261,29 +1255,119 @@ export function initXOpat(PLUGINS: Record<string, XOpatElementItem>, MODULES: Re
         visualizations: VisualizationItem[] | undefined = undefined,
         bgSpec: number | number[] | undefined | null = undefined,
         vizSpec: number | number[] | undefined | null = undefined,
-        opts: { deriveOverlayFromBackgroundGoals?: boolean } = {}
+        opts: {
+            deriveOverlayFromBackgroundGoals?: boolean,
+            historyMode?: "auto" | "skip" | "visualization-step" | "content-switch" | "reset-history",
+            fromHistory?: boolean,
+            preserveHistoryOnBackgroundChange?: boolean,
+            warnOnHistoryBoundary?: boolean,
+            historyLabel?: string,
+        } = {}
     ) {
+        // TODO: consider moving these functions to utilities and using them for serialization
+        const normalizeHistorySelection = (value: any): Array<number | undefined> | undefined => {
+            if (value == null) return undefined;
+            if (Array.isArray(value)) {
+                return value.map((entry: any) => Number.isInteger(entry) ? entry : undefined);
+            }
+            return Number.isInteger(value) ? [value] : undefined;
+        };
+
+        const cloneForHistory = <T>(value: T): T => {
+            if (value === undefined || value === null) return value;
+            try {
+                return JSON.parse(safeStringify(value));
+            } catch (e) {
+                console.warn("Failed to snapshot state for history.", e);
+                return value;
+            }
+        };
+
+        const captureLoadSnapshotFromConfig = (source: any = APPLICATION_CONTEXT._dangerouslyAccessConfig()) => ({
+            data: Array.isArray(source?.data) ? cloneForHistory(source.data) : [],
+            background: Array.isArray(source?.background) ? cloneForHistory(source.background) : [],
+            visualizations: Array.isArray(source?.visualizations) ? cloneForHistory(source.visualizations) : [],
+            activeBackgroundIndex: normalizeHistorySelection(
+                APPLICATION_CONTEXT.getOption("activeBackgroundIndex", undefined, true, true)
+            ),
+            activeVisualizationIndex: normalizeHistorySelection(
+                APPLICATION_CONTEXT.getOption("activeVisualizationIndex", undefined, true, true)
+            ),
+        });
+
+        const selectedBackgroundIdsFromSnapshot = (snapshot: any): string[] => {
+            const selected = normalizeHistorySelection(snapshot?.activeBackgroundIndex) || [];
+            const backgrounds = Array.isArray(snapshot?.background) ? snapshot.background : [];
+            return selected
+                .map((index: number | undefined) => Number.isInteger(index) ? backgrounds[index as number] : undefined)
+                .filter(Boolean)
+                .map((entry: BackgroundItem | BackgroundConfig) => APPLICATION_CONTEXT.registerConfig(entry).id);
+        };
+
+        const selectedVisualizationConfigsFromSnapshot = (snapshot: any) => {
+            const selected = normalizeHistorySelection(snapshot?.activeVisualizationIndex) || [];
+            const visualizations = Array.isArray(snapshot?.visualizations) ? snapshot.visualizations : [];
+            return selected.map((index: number | undefined) =>
+                Number.isInteger(index) ? visualizations[index as number] : undefined
+            );
+        };
+
+        const buildVisibleLoadFingerprint = (snapshot: any) => safeStringify({
+            selectedBackgroundIds: selectedBackgroundIdsFromSnapshot(snapshot),
+            selectedVisualizations: selectedVisualizationConfigsFromSnapshot(snapshot),
+            data: snapshot?.data || [],
+        });
+
+        const loadSnapshotsEqual = (a: any, b: any) => safeStringify(a) === safeStringify(b);
+        const visibleLoadChanged = (a: any, b: any) => buildVisibleLoadFingerprint(a) !== buildVisibleLoadFingerprint(b);
+
+        const restoreLoadSnapshot = async (snapshot: any) => {
+            if (!snapshot) return false;
+            return await APPLICATION_CONTEXT.openViewerWith(
+                cloneForHistory(snapshot.data),
+                cloneForHistory(snapshot.background),
+                cloneForHistory(snapshot.visualizations),
+                cloneForHistory(snapshot.activeBackgroundIndex),
+                cloneForHistory(snapshot.activeVisualizationIndex),
+                {
+                    deriveOverlayFromBackgroundGoals: false,
+                    historyMode: "skip",
+                    fromHistory: true,
+                    warnOnHistoryBoundary: false,
+                }
+            );
+        };
+
+        const parseLooseBoolean = (value: any, fallback = false) => {
+            if (value === undefined || value === null) return fallback;
+            if (value === false || value === "false") return false;
+            if (value === true || value === "true") return true;
+            return Boolean(value);
+        };
+
         USER_INTERFACE.Loading.show(true);
 
         await VIEWER_MANAGER.raiseEventAwaiting(
-            'before-open', { data, background, visualizations, bgSpec, vizSpec }
+            'before-open', { data, background, visualizations, bgSpec, vizSpec, opts }
         ).catch((e: any) => console.warn("Exception in 'before-open' event handler: ", e));
 
         //todo consider return false if some dialog refuses the reload
         await Dialogs.awaitHidden();
 
         const config = APPLICATION_CONTEXT._dangerouslyAccessConfig();
+        const previousSnapshot = captureLoadSnapshotFromConfig(config);
+        const history = APPLICATION_CONTEXT.history;
+        const hadOpenViewerState = (VIEWER_MANAGER.viewers || []).some((viewer: OpenSeadragon.Viewer | undefined) => {
+            if (!viewer) return false;
+            if (typeof viewer.isOpen === "function" && viewer.isOpen()) return true;
+            return (viewer.world?.getItemCount?.() || 0) > 0;
+        });
         const existingBackground = Array.isArray(config.background) ? config.background : [];
         const existingVisualizations = Array.isArray(config.visualizations) ? config.visualizations : [];
         const existingData = Array.isArray(config.data) ? config.data : [];
         const normalizedBackground = background === null ? [] : background;
         const normalizedVisualizations = visualizations === null ? [] : visualizations;
         const normalizedData = data === null ? [] : data;
-        const isBgSame = normalizedBackground === undefined || (
-            Array.isArray(normalizedBackground) &&
-            normalizedBackground.length === existingBackground.length &&
-            normalizedBackground.every((bg: BackgroundItem, i: number) => APPLICATION_CONTEXT.sameBackground(bg, existingBackground[i]))
-        );
 
         // -- update CONFIG if new values are provided (undefined => keep ; null => erase)
         if (typeof normalizedData !== "undefined") config.data = normalizedData;
@@ -1339,6 +1423,59 @@ export function initXOpat(PLUGINS: Record<string, XOpatElementItem>, MODULES: Re
         if (typeof activeViz === "number") {
             activeViz = [activeViz];
             APPLICATION_CONTEXT.setOption("activeVisualizationIndex", activeViz);
+        }
+
+        const nextSnapshot = captureLoadSnapshotFromConfig(config);
+        const selectedBackgroundsBefore = selectedBackgroundIdsFromSnapshot(previousSnapshot);
+        const selectedBackgroundsAfter = selectedBackgroundIdsFromSnapshot(nextSnapshot);
+        const backgroundChanged = hadOpenViewerState && JSON.stringify(selectedBackgroundsBefore) !== JSON.stringify(selectedBackgroundsAfter);
+        const anythingVisibleChanged = hadOpenViewerState && visibleLoadChanged(previousSnapshot, nextSnapshot);
+        const anythingChanged = hadOpenViewerState && !loadSnapshotsEqual(previousSnapshot, nextSnapshot);
+
+        const preserveHistoryOnBackgroundChange = opts.preserveHistoryOnBackgroundChange ?? parseLooseBoolean(
+            APPLICATION_CONTEXT.config.params?.preserveHistoryOnBackgroundChange,
+            false
+        );
+        const warnOnHistoryBoundary = opts.warnOnHistoryBoundary ?? parseLooseBoolean(
+            APPLICATION_CONTEXT.config.params?.warnOnBackgroundHistoryBoundary,
+            true
+        );
+
+        let historyMode = opts.historyMode || "auto";
+        if (historyMode === "auto") {
+            if (!anythingVisibleChanged) {
+                historyMode = "skip";
+            } else if (backgroundChanged) {
+                historyMode = preserveHistoryOnBackgroundChange ? "content-switch" : "reset-history";
+            } else {
+                historyMode = "visualization-step";
+            }
+        }
+
+        const hasCommittedHistory = !!history.hasAnyStackHistory();
+        if (!opts.fromHistory && backgroundChanged && historyMode === "reset-history" && hasCommittedHistory) {
+            const boundaryEvent = {
+                previousSnapshot,
+                nextSnapshot,
+                historyMode,
+                preserveHistoryOnBackgroundChange,
+                cancel: false,
+                preventDefault: false,
+                message: "Changing the loaded background will clear undo history for the current content. Continue?",
+            };
+
+            await VIEWER_MANAGER.raiseEventAwaiting('before-history-boundary', boundaryEvent)
+                .catch((e: any) => console.warn("Exception in 'before-history-boundary' event handler: ", e));
+
+            if (boundaryEvent.cancel) {
+                USER_INTERFACE.Loading.show(false);
+                return false;
+            }
+
+            if (warnOnHistoryBoundary && !boundaryEvent.preventDefault && !window.confirm(boundaryEvent.message)) {
+                USER_INTERFACE.Loading.show(false);
+                return false;
+            }
         }
 
         // Build per-viewer plan:
@@ -1422,6 +1559,77 @@ export function initXOpat(PLUGINS: Record<string, XOpatElementItem>, MODULES: Re
         };
 
         // Helper: open one tile into a viewer with bookkeeping
+        const deriveLoadKey = (dataSpec: any, source: any, fallbackIndex: number) => {
+            try {
+                const dataId = BackgroundConfig.dataFromSpec(dataSpec);
+                if (dataId !== undefined) {
+                    return `data:${typeof dataId === "string" ? dataId : safeStringify(dataId)}`;
+                }
+            } catch (_) {
+                // keep falling back
+            }
+
+            const normalizedSource = source && typeof source === "object" && source.url !== undefined
+                ? source.url
+                : source;
+
+            if (typeof normalizedSource === "string") return `source:${normalizedSource}`;
+
+            try {
+                const serialized = safeStringify(normalizedSource);
+                if (serialized) return `source:${serialized}`;
+            } catch (_) {
+                // ignore and use fallback below
+            }
+
+            return `index:${fallbackIndex}`;
+        };
+
+        const configureOpenedItem = (item: any, kind: string, index: number, ctx: any) => {
+            item.__targetIndex = index;
+            if (ctx && typeof ctx.loadKeyForItem === "function") {
+                item.__xopatLoadKey = ctx.loadKeyForItem(index);
+            }
+
+            if (kind === "background") {
+                const bgIdx = ctx.bgIndexForItem(index);
+                item.getConfig = (type: string | undefined) =>
+                    !type || type === "background" ? cfg.background[bgIdx] : undefined;
+            } else if (kind === "visualization") {
+                const vIdx = ctx.vizIndexForItem(index);
+                item.getConfig = (type: string | undefined) =>
+                    !type || type === "visualization" ? cfg.visualizations[vIdx] : undefined;
+            } else {
+                item.getConfig = () => undefined;
+            }
+
+            const dataSpec = ctx && typeof ctx.dataForItem === "function"
+                ? ctx.dataForItem(index)
+                : undefined;
+
+            const cfgForItem = item.getConfig();
+            let options = cfgForItem && cfgForItem.options;
+
+            if (dataSpec && typeof dataSpec === "object" && dataSpec.options) {
+                options = { ...(dataSpec.options || {}), ...(options || {}) };
+            }
+
+            if (options !== undefined && item?.source?.setSourceOptions) {
+                item.source.setSourceOptions(options);
+            }
+        };
+
+        const getExistingItemLoadKey = (item: any, fallbackIndex: number) => {
+            if (!item) return `missing:${fallbackIndex}`;
+            if (item.__xopatLoadKey) return item.__xopatLoadKey;
+
+            const configForItem = item.getConfig?.() || item.getConfig?.("background") || item.getConfig?.("visualization");
+            const dataSpec = configForItem?.dataReference !== undefined
+                ? cfg.data[configForItem.dataReference]
+                : configForItem;
+            return deriveLoadKey(dataSpec, item.source?.url || item.source, fallbackIndex);
+        };
+
         const openTile = async (viewer: OpenSeadragon.Viewer, source: any, kind: string, index: number, ctx: any) => {
             // First create a tile source class
             const originalSource = source.source || source;
@@ -1450,47 +1658,7 @@ export function initXOpat(PLUGINS: Record<string, XOpatElementItem>, MODULES: Re
                     index,
                     // TODO: bad type
                     success: (event: any) => {
-                        event.item.__targetIndex = index;
-
-                        // DataSpecification used to construct this tile (if any),
-                        // passed from openIntoViewer via ctx.dataForItem.
-                        const dataSpec = ctx && typeof ctx.dataForItem === "function"
-                            ? ctx.dataForItem(index)
-                            : undefined;
-
-                        // Attach contextual config getters for this item
-                        if (kind === "background") {
-                            const bgIdx = ctx.bgIndexForItem(index);
-                            /**
-                             * @this {OpenSeadragon.TiledImage}
-                             * @function getConfig
-                             * @param {string} [type=undefined]
-                             * @memberof OpenSeadragon.TiledImage
-                             * @returns {BackgroundItem|VisualizationItem|undefined}
-                             */
-                            event.item.getConfig = (type: string | undefined) =>
-                                !type || type === "background" ? cfg.background[bgIdx] : undefined;
-                        } else if (kind === "visualization") {
-                            const vIdx = ctx.vizIndexForItem(index);
-                            event.item.getConfig = (type: string | undefined) =>
-                                !type || type === "visualization" ? cfg.visualizations[vIdx] : undefined;
-                        } else {
-                            event.item.getConfig = () => undefined;
-                        }
-
-                        // Options resolution:
-                        //   base: DataOverride.options (if any)
-                        //   override/extend: config-level options (bg/viz)
-                        const cfgForItem = event.item.getConfig();
-                        let options = cfgForItem && cfgForItem.options;
-
-                        if (dataSpec && typeof dataSpec === "object" && dataSpec.options) {
-                            options = { ...(dataSpec.options || {}), ...(options || {}) };
-                        }
-
-                        if (options !== undefined) {
-                            event.item.source.setSourceOptions(options);
-                        }
+                        configureOpenedItem(event.item, kind, index, ctx);
                         resolve(true);
                     },
                     error: (e: any) => {
@@ -1506,7 +1674,7 @@ export function initXOpat(PLUGINS: Record<string, XOpatElementItem>, MODULES: Re
         // Helper: configure shaders/rendering for a viewer + open its images
         const openIntoViewer = async (entry: any, viewerIndex: number) => {
             const viewer = VM.viewers[viewerIndex];
-            const isSurgical = isBgSame && viewer.isOpen() && viewer.world.getItemCount() > 0;
+            const canSurgicallyDiff = viewer.isOpen() && viewer.world.getItemCount() > 0;
 
             // (A) Identify Backgrounds
             const openedBase: BackgroundConfig[] = [];
@@ -1587,7 +1755,7 @@ export function initXOpat(PLUGINS: Record<string, XOpatElementItem>, MODULES: Re
                         //  - Background shader has its own dataReferences
                         //  - Each dataReference is opened exactly once (shared with other shaders)
                         shaderCfg.tiledImages = [];
-                        shaderCfg.name = shaderCfg.name || UTILITIES.nameFromBGOrIndex(shaderCfg.dataReferences[0]);
+                        shaderCfg.name = shaderCfg.name || UTILITIES.nameFromBGOrIndex(shaderCfg.dataReferences![0]);
 
                         for (const dataIndex of shaderCfg.dataReferences!) {
                             if (!uniqueOsdWorldIndexes.has(dataIndex)) {
@@ -1639,20 +1807,13 @@ export function initXOpat(PLUGINS: Record<string, XOpatElementItem>, MODULES: Re
                 Object.assign(renderOutput, shaderConfigMap);
             }
 
+            const loadKeys = toOpen.map((source, index) =>
+                deriveLoadKey(openedSpecOrder[index], source, index)
+            );
+
             // (D) Execution: Full Reset vs Surgical Update
-            if (!isSurgical) {
+            if (!canSurgicallyDiff) {
                 VM._resetViewer(viewerIndex);
-            } else {
-                // Remove only visualization layers that don't match the new 'toOpen' list
-                const currentCount = viewer.world.getItemCount();
-                for (let i = currentCount - 1; i >= firstVizIndex; i--) {
-                    const item = viewer.world.getItemAt(i);
-                    const sourceUrl = item.source.url || item.source;
-                    // If the existing source isn't in our new visualization list, pull it
-                    if (!toOpen.slice(firstVizIndex).some(newSrc => (newSrc.url || newSrc) === sourceUrl)) {
-                        viewer.world.removeItem(item);
-                    }
-                }
             }
 
             // Configure the drawer
@@ -1665,27 +1826,62 @@ export function initXOpat(PLUGINS: Record<string, XOpatElementItem>, MODULES: Re
             const ctx = {
                 bgIndexForItem: (i: number) => entry.bgIndices[0],
                 vizIndexForItem: (i: number) => visIndexForThis,
-                dataForItem: (i: number) => openedSpecOrder[i]
+                dataForItem: (i: number) => openedSpecOrder[i],
+                loadKeyForItem: (i: number) => loadKeys[i],
             };
 
             let successOpened = 0;
-            for (let i = 0; i < toOpen.length; i++) {
-                const isBg = i < firstVizIndex;
-                const existingItem = isSurgical ? viewer.world.getItemAt(i) : null;
+            const retainedItems = new Set<any>();
 
-                // Skip if surgically updating and item already exists with same source
-                if (existingItem && (existingItem.source.url || existingItem.source) === (toOpen[i].url || toOpen[i])) {
+            for (let i = 0; i < toOpen.length; i++) {
+                const kind = i < firstVizIndex ? "background" : "visualization";
+                let reusable = canSurgicallyDiff ? viewer.world.getItemAt(i) : null;
+
+                if (reusable && getExistingItemLoadKey(reusable, i) === loadKeys[i] && !retainedItems.has(reusable)) {
+                    configureOpenedItem(reusable, kind, i, ctx);
+                    retainedItems.add(reusable);
                     successOpened++;
                     continue;
                 }
 
-                if (await openTile(viewer, toOpen[i], isBg ? "background" : "visualization", i, ctx)) {
+                reusable = null;
+                if (canSurgicallyDiff) {
+                    const currentCount = viewer.world.getItemCount();
+                    for (let j = i + 1; j < currentCount; j++) {
+                        const candidate = viewer.world.getItemAt(j);
+                        if (!candidate || retainedItems.has(candidate)) continue;
+                        if (getExistingItemLoadKey(candidate, j) !== loadKeys[i]) continue;
+                        reusable = candidate;
+                        break;
+                    }
+                }
+
+                if (reusable) {
+                    viewer.world.setItemIndex(reusable, i);
+                    configureOpenedItem(reusable, kind, i, ctx);
+                    retainedItems.add(reusable);
+                    successOpened++;
+                    continue;
+                }
+
+                if (await openTile(viewer, toOpen[i], kind, i, ctx)) {
+                    const openedItem = viewer.world.getItemAt(i);
+                    if (openedItem) retainedItems.add(openedItem);
                     successOpened++;
                 }
             }
 
+            if (canSurgicallyDiff) {
+                for (let i = viewer.world.getItemCount() - 1; i >= 0; i--) {
+                    const item = viewer.world.getItemAt(i);
+                    if (!retainedItems.has(item)) {
+                        viewer.world.removeItem(item);
+                    }
+                }
+            }
+
             // Only fire full re-init events if it wasn't a surgical update
-            if (!isSurgical) {
+            if (!canSurgicallyDiff || viewer.world.getItemCount() < 1) {
                 handleSyntheticOpenEvent(viewer, successOpened, toOpen.length);
             } else {
                 // TODO - use event reaction instead?
@@ -1730,6 +1926,30 @@ export function initXOpat(PLUGINS: Record<string, XOpatElementItem>, MODULES: Re
             });
             UTILITIES.syncOpenedViewersToSession();
             UTILITIES.syncSessionToUrl(false);
+
+            if (!opts.fromHistory && history && history.isRecordingEnabled !== false && anythingChanged) {
+                if (historyMode === "reset-history") {
+                    history.clear?.({
+                        kind: "load-history-reset",
+                        reason: "background-changed",
+                        previousSnapshot,
+                        nextSnapshot: captureLoadSnapshotFromConfig(config),
+                    });
+                } else if (historyMode === "content-switch" || historyMode === "visualization-step") {
+                    const appliedSnapshot = captureLoadSnapshotFromConfig(config);
+                    history.pushExecuted?.(
+                        () => restoreLoadSnapshot(appliedSnapshot),
+                        () => restoreLoadSnapshot(previousSnapshot),
+                        {
+                            kind: historyMode,
+                            label: opts.historyLabel || (historyMode === "content-switch" ? "content switch" : "visualization change"),
+                            previousSnapshot,
+                            nextSnapshot: appliedSnapshot,
+                        }
+                    );
+                }
+            }
+
             USER_INTERFACE.Loading.show(false);
             console.log("Open done:", e);
             if (USER_INTERFACE.Errors.active) {
@@ -1804,7 +2024,7 @@ export function initXOpat(PLUGINS: Record<string, XOpatElementItem>, MODULES: Re
         try {
             // Add plugin definition to CONFIG, which is part of POST_DATA entry. Do not change anything if not requested.
             if (includedPluginsList) {
-                const pluginRefs = CONFIG.plugins;
+                const pluginRefs = CONFIG.plugins || {};
                 CONFIG.plugins = {};
                 for (let plugin in includedPluginsList) {
                     const oldPluginRef = pluginRefs[plugin];
@@ -1861,161 +2081,6 @@ export function initXOpat(PLUGINS: Record<string, XOpatElementItem>, MODULES: Re
             true);
     }
 
-    /**
-     * History provider is logics that can stub history steps without actually
-     * explicitly putting anything inside history state. For example, user is creating
-     * a polygon. 'undo' step can undo individual points, but only changes the internal
-     * creation logics state, not pushing anything to the history. Providers override
-     * the history API and only IF no provider handles the step, the original history logics fires.
-     * @type {Window.HistoryProvider}
-     */
-    window.HistoryProvider = class XOpatHistoryProvider {
-        get importance(): number {
-            return 0;
-        }
-        undo(): boolean {
-            throw new Error('Not implemented');
-        }
-        redo(): boolean {
-            throw new Error('Not implemented');
-        }
-        canUndo(): boolean {
-            throw new Error('Not implemented');
-        }
-        canRedo(): boolean {
-            throw new Error('Not implemented');
-        }
-    };
-
-    const XOpatHistory = class XOpatHistory extends OpenSeadragon.EventSource {
-        _buffer: Array<{ forward: () => any; backward: () => void } | null>;
-        _buffidx: number;
-        _lastValidIndex: number;
-        _providers: HistoryProvider[];
-        BUFFER_LENGTH: number;
-
-        constructor(size = 99) {
-            super();
-            this._buffer = [];
-            // points to the current state in the redo/undo index in circular buffer
-            this._buffidx = -1;
-            // points to the most recent object in cache, when undo action comes full loop to _lastValidIndex
-            // it means the redo action went full circle on the buffer, and we cannot further undo,
-            // if we set this index to buffindex, we throw away ability to redo (diverging future)
-            this._lastValidIndex = -1;
-            this._providers = [];
-            this.BUFFER_LENGTH = size;
-        }
-
-        /**
-         * Outsource history logics to external API
-         * @param {HistoryProvider} provider history api provider
-         */
-        registerProvider(provider: HistoryProvider) {
-            this._providers.push(provider);
-            this.raiseEvent('register-provider', { provider });
-        }
-
-        /**
-         * Set the number of steps possible to go in the past
-         * @param {number} value size of the history
-         */
-        set size(value: number) {
-            this.BUFFER_LENGTH = Math.max(2, value);
-            this.raiseEvent('change-size', { size: value });
-        }
-
-        /**
-         * Push a new action to the history buffer. The function forward is executed immediately -
-         * you must not call this method/logics manually.
-         * @param {*} forward function to execute the forward (redo) operation, it is executed once upon call
-         * @param {*} backward function to execute the backward (undo) operation
-         * @return {any} return value of the forward function executed
-         */
-        push(forward: () => any, backward: () => void): any {
-            if (typeof forward !== 'function' || typeof backward !== 'function') {
-                throw new Error("Both forward and backward must be functions.");
-            }
-
-            this._buffidx = (this._buffidx + 1) % this.BUFFER_LENGTH;
-            this._buffer[this._buffidx] = { forward, backward };
-            this._lastValidIndex = this._buffidx;
-            this.raiseEvent('push');
-            return forward();
-        }
-
-        /**
-         * Go step back in the history.
-         */
-        undo() {
-            if (!this.canUndo()) return;
-
-            for (let historyProvider of this._providers) {
-                if (historyProvider.undo()) {
-                    this.raiseEvent('undo');
-                    return;
-                }
-            }
-
-            const entry = this._buffer[this._buffidx];
-            if (!entry) return;
-            entry.backward();
-            this._buffidx = (this._buffidx - 1 + this.BUFFER_LENGTH) % this.BUFFER_LENGTH;
-
-            if (this._lastValidIndex === this._buffidx) {
-                this._buffer[this._lastValidIndex] = null;
-
-                this._lastValidIndex--;
-                if (this._lastValidIndex < 0) this._lastValidIndex = this.BUFFER_LENGTH - 1;
-            }
-            this.raiseEvent('undo');
-        }
-
-        /**
-         * Go step forward in the history.
-         */
-        redo() {
-            if (!this.canRedo()) return;
-
-            for (let historyProvider of this._providers) {
-                if (historyProvider.redo()) {
-                    this.raiseEvent('redo');
-                    return;
-                }
-            }
-
-            this._buffidx = (this._buffidx + 1) % this.BUFFER_LENGTH;
-            const entry = this._buffer[this._buffidx];
-            if (!entry) return;
-            entry.forward();
-            this.raiseEvent('redo');
-        }
-
-        /**
-         * Check if undo is possible
-         * @return {boolean}
-         */
-        canUndo() {
-            for (let historyProvider of this._providers) {
-                if (historyProvider.canUndo()) return true;
-            }
-            return !!this._buffer[this._buffidx];
-        }
-
-        /**
-         * Check if redo is possible
-         * @return {boolean}
-         */
-        canRedo() {
-            for (let historyProvider of this._providers) {
-                if (historyProvider.canRedo()) return true;
-            }
-            return this._lastValidIndex >= 0 && this._buffidx !== this._lastValidIndex;
-        }
-    };
-    // TODO collision with window.History 
-    window.History = XOpatHistory as unknown as (new () => History) & XOpatHistoryConstructor;
-
     APPLICATION_CONTEXT.history = new XOpatHistory(APPLICATION_CONTEXT.getOption("historySize", 99));
 
     // Key event handlers - todo create shortcut manager
@@ -2062,6 +2127,13 @@ export function initXOpat(PLUGINS: Record<string, XOpatElementItem>, MODULES: Re
             bounds.y += speedY * bounds.height;
             VIEWER.viewport.fitBounds(bounds);
         }
+
+        function isEditableTarget(target: EventTarget | null) {
+            const el = target instanceof HTMLElement ? target : document.activeElement;
+            return !!el && (el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement ||
+                el instanceof HTMLSelectElement || (el as any).isContentEditable);
+        }
+
         VIEWER_MANAGER.addHandler('key-up', function (e: KeyboardEvent & { focusCanvas: boolean }) {
             if (e.focusCanvas) {
                 if (!e.altKey && !e.ctrlKey && !e.metaKey && !e.shiftKey) {
@@ -2118,6 +2190,13 @@ export function initXOpat(PLUGINS: Record<string, XOpatElementItem>, MODULES: Re
                             return;
                     }
                 }
+            }
+
+            if (e.ctrlKey && !e.altKey && (e.key === "z" || e.key === "Z")) {
+                if (isEditableTarget(e.target)) return;
+                e.preventDefault();
+
+                return e.shiftKey ? APPLICATION_CONTEXT.history.redo() : APPLICATION_CONTEXT.history.undo();
             }
 
             if (e.key === 'Escape') {

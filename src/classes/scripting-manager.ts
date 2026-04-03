@@ -8,6 +8,7 @@ import {XOpatScriptingApi} from "./scripting/abstract-api";
 
 import { XOpatApplicationScriptApi } from "./scripting/app-api";
 import { XOpatViewerScriptApi } from "./scripting/viewer-api";
+import { XOpatVisualizationScriptApi } from "./scripting/visualization-api";
 
 
 const WORKER_RESERVED_GLOBALS = [
@@ -266,6 +267,7 @@ export class ScriptingContext<
     protected _createdAt: number;
     protected _lastUsedAt: number;
     protected _activeViewerContextId: string | null;
+    protected _bypassConsentDialog: boolean;
 
     constructor(
         manager: ScriptingManager<TNamespaces>,
@@ -274,6 +276,7 @@ export class ScriptingContext<
             label?: string;
             metadata?: Record<string, unknown>;
             activeViewerContextId?: string | null;
+            bypassConsentDialog?: boolean;
         } = {}
     ) {
         this.manager = manager;
@@ -284,6 +287,7 @@ export class ScriptingContext<
         this._createdAt = Date.now();
         this._lastUsedAt = this._createdAt;
         this._activeViewerContextId = options.activeViewerContextId ?? null;
+        this._bypassConsentDialog = options.bypassConsentDialog === true;
     }
 
     get id(): string {
@@ -364,12 +368,32 @@ export class ScriptingContext<
         return this._activeViewerContextId;
     }
 
+    /**
+     * Enable or disable automatic approval of consent dialogs for this scripting context.
+     * When set to true the context behaves like a CLI "-y" flag and host-side prompts are skipped.
+     *
+     * @param value true to auto-accept consent prompts, false to keep prompting the user
+     * @returns this for chaining
+     */
+    setBypassConsentDialog(value: boolean = false): this {
+        this._bypassConsentDialog = value === true;
+        return this.touch();
+    }
+
+    /**
+     * Returns true when this context should skip consent dialogs and automatically approve the action.
+     */
+    isConsentDialogBypassed(): boolean {
+        return this._bypassConsentDialog;
+    }
+
     getState(): ScriptingContextState {
         return {
             id: this._id,
             label: this._label,
             metadata: this._metadata ? { ...this._metadata } : undefined,
             activeViewerContextId: this._activeViewerContextId,
+            bypassConsentDialog: this._bypassConsentDialog,
             workerIds: this.listWorkerIds(),
             createdAt: this._createdAt,
             lastUsedAt: this._lastUsedAt,
@@ -554,12 +578,12 @@ export class ScriptingManager<
         return normalized || this.defaultContextId;
     }
 
-
     createContext(options: {
         id?: string;
         label?: string;
         metadata?: Record<string, unknown>;
         activeViewerContextId?: string | null;
+        bypassConsentDialog?: boolean;
     } = {}): ScriptingContext<TNamespaces> {
         const contextId = this.normalizeContextId(options.id);
         const existing = this.contexts[contextId];
@@ -569,6 +593,9 @@ export class ScriptingManager<
             if (options.activeViewerContextId !== undefined) {
                 existing.setActiveViewerContextId(options.activeViewerContextId);
             }
+            if (options.bypassConsentDialog !== undefined) {
+                existing.setBypassConsentDialog(options.bypassConsentDialog);
+            }
             return existing;
         }
 
@@ -576,6 +603,7 @@ export class ScriptingManager<
             label: options.label,
             metadata: options.metadata,
             activeViewerContextId: options.activeViewerContextId,
+            bypassConsentDialog: options.bypassConsentDialog,
         });
         this.contexts[contextId] = context;
         return context;
@@ -625,6 +653,7 @@ export class ScriptingManager<
         try {
             await this.ingestApi(new XOpatApplicationScriptApi("application"));
             await this.ingestApi(new XOpatViewerScriptApi("viewer"));
+            await this.ingestApi(new XOpatVisualizationScriptApi("visualization"));
 
             const staticContext = this.constructor as unknown as ScriptManagerStatic<TNamespaces>;
             const externalRegistrations = [...(staticContext.__externalApiRegistrations || [])];
