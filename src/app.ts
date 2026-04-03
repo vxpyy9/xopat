@@ -1,10 +1,3 @@
-import type {
-    ViewportSetup,
-    XOpatCoreConfig,
-    XOpatElementItem,
-    XOpatSetup,
-    XOpatVisualizationConfig
-} from "./types/config";
 import type { OpenEvent, TileLoadFailedEvent } from "openseadragon";
 import { BackgroundConfig } from "./classes/background-config";
 import { HttpClient } from "./classes/http-client";
@@ -74,7 +67,7 @@ export function initXOpat(PLUGINS: Record<string, XOpatElementItem>, MODULES: Re
         });
     }
     POST_DATA = xOpatParseConfiguration(POST_DATA, $.i18n, ENV.server.supportsPost) as Record<string, unknown>;
-    let CONFIG = POST_DATA.visualization as XOpatVisualizationConfig;
+    let CONFIG = POST_DATA.visualization as XOpatRuntimeConfig;
     if (!CONFIG) {
         CONFIG = {
             error: $.t('error.nothingToRender'),

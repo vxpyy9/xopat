@@ -186,9 +186,7 @@ class ChatModule extends XOpatModuleSingleton {
             providerId: this.chatPanel?._providerId || null,
             sessionId: activeSessionId,
             viewerContextId,
-            providerRuntimeContextId: this.chatService?.getSessionProviderRuntimeContextId?.(activeSessionId)
-                || this.chatService?.getSessionProviderContextId?.(activeSessionId)
-                || null,
+            providerRuntimeContextId: this.chatService?.getSessionProviderContextId?.(activeSessionId) || null,
         });
 
         return context;
@@ -287,20 +285,7 @@ class ChatModule extends XOpatModuleSingleton {
         scriptStepExtensionSize: number;
         minSuccessfulProgressStepsBeforeExtension: number;
     } {
-        const positiveInt = (value: unknown, fallback: number) => {
-            const parsed = Number(value);
-            return Number.isFinite(parsed) && parsed > 0 ? Math.floor(parsed) : fallback;
-        };
-
-        const staticMeta = typeof (this as any).getStaticMeta === 'function'
-            ? ((this as any).getStaticMeta() || {})
-            : {};
-        const legacyInclude = (globalThis as any).INCLUDE || (globalThis as any).include || {};
-        const chatCfg: any = (staticMeta && typeof staticMeta === 'object' && Object.keys(staticMeta).length)
-            ? staticMeta
-            : (legacyInclude.chat || (legacyInclude.modules && legacyInclude.modules.chat) || {});
-
-        const personalities: ChatPersonality[] = Array.isArray(chatCfg.personalities) ? [...chatCfg.personalities] : [];
+        const personalities: ChatPersonality[] = this.getStaticMeta('personalities', []);
 
         if (!personalities.length) {
             personalities.push({
@@ -317,14 +302,11 @@ When scripting is not available or insufficient, explain the limitation clearly.
             });
         }
 
-        const defaultPersonalityId = chatCfg.defaultPersonalityId || personalities[0]?.id || 'default';
-        const maxScriptSteps = positiveInt(chatCfg.maxScriptSteps, 12);
-        const maxScriptStepExtensions = positiveInt(chatCfg.maxScriptStepExtensions, 2);
-        const scriptStepExtensionSize = positiveInt(chatCfg.scriptStepExtensionSize, 4);
-        const minSuccessfulProgressStepsBeforeExtension = positiveInt(
-            chatCfg.minSuccessfulProgressStepsBeforeExtension,
-            4
-        );
+        const defaultPersonalityId = this.getStaticMeta('defaultPersonalityId') || personalities[0]?.id || 'default';
+        const maxScriptSteps = this.getStaticMeta('maxScriptSteps', 12);
+        const maxScriptStepExtensions = this.getStaticMeta('maxScriptStepExtensions', 3);
+        const scriptStepExtensionSize = this.getStaticMeta('scriptStepExtensionSize', 4);
+        const minSuccessfulProgressStepsBeforeExtension = this.getStaticMeta('minSuccessfulProgressStepsBeforeExtension', 4);
 
         return {
             personalities,
@@ -367,12 +349,26 @@ When scripting is not available or insufficient, explain the limitation clearly.
             return match?.[1] || fallback;
         };
 
-        const asPlainTextMessage = (text: string, ok = true): ChatMessage => ({
+        const withInternalMetadata = (message: ChatMessage): ChatMessage => ({
+            ...message,
+            metadata: {
+                ...(message.metadata || {}),
+                hiddenFromChatUi: true,
+                internalSource: 'script-runtime',
+            },
+        });
+
+        const asFeedbackMessage = (text: string, ok = true): ChatMessage => withInternalMetadata({
             role: 'user',
-            parts: [{ ok, type: 'script-result', text }],
+            parts: [{ ok, type: 'script-result', text } as any],
             content: text,
             createdAt: new Date(),
         });
+
+        const asGuidanceForMissingReturn = (): ChatMessage => asFeedbackMessage(
+            'Script execution finished without a returned value. The runtime only feeds back the explicit return value. Correct the previous script by returning the final string, object, array, or attachment-producing value.',
+            false
+        );
 
         const asImageMessage = async (dataUrl: string, name = 'script-image.png'): Promise<ChatMessage> => {
             const uploaded = await this._storeScriptAttachment({
@@ -382,7 +378,7 @@ When scripting is not available or insufficient, explain the limitation clearly.
                 name,
             });
 
-            return {
+            return withInternalMetadata({
                 role: 'user',
                 parts: [{
                     type: 'image',
@@ -391,10 +387,13 @@ When scripting is not available or insufficient, explain the limitation clearly.
                     name: uploaded.name,
                     dataUrl: uploaded.dataUrl,
                     metadata: uploaded.metadata,
-                }],
-                content: '[Image]',
+                }, {
+                    type: 'host-feedback',
+                    text: `Script produced an image attachment${uploaded.name ? `: ${uploaded.name}` : ''}. Read the attachment and any other returned fields to answer the user.`,
+                } as any],
+                content: uploaded.name ? `[Image: ${uploaded.name}]` : '[Image]',
                 createdAt: new Date(),
-            };
+            });
         };
 
         const asFileMessage = async (dataUrl: string, name = 'script-file'): Promise<ChatMessage> => {
@@ -405,7 +404,7 @@ When scripting is not available or insufficient, explain the limitation clearly.
                 name,
             });
 
-            return {
+            return withInternalMetadata({
                 role: 'user',
                 parts: [{
                     type: 'file',
@@ -414,18 +413,25 @@ When scripting is not available or insufficient, explain the limitation clearly.
                     name: uploaded.name || name,
                     dataUrl: uploaded.dataUrl,
                     metadata: uploaded.metadata,
-                }],
-                content: '[File]',
+                }, {
+                    type: 'host-feedback',
+                    text: `Script produced a file attachment${uploaded.name ? `: ${uploaded.name}` : ''}. Read the attachment and any other returned fields to answer the user.`,
+                } as any],
+                content: uploaded.name ? `[File: ${uploaded.name}]` : '[File]',
                 createdAt: new Date(),
-            };
+            });
         };
 
         if (result == null) {
-            return asPlainTextMessage('Done.');
+            return asGuidanceForMissingReturn();
         }
 
         if (typeof result === 'string') {
             const value = result.trim();
+
+            if (!value) {
+                return asGuidanceForMissingReturn();
+            }
 
             if (isImageDataUrl(value)) {
                 return await asImageMessage(value, 'script-image.png');
@@ -440,7 +446,7 @@ When scripting is not available or insufficient, explain the limitation clearly.
                 return await asFileMessage(value);
             }
 
-            return asPlainTextMessage(value || 'Done.');
+            return asFeedbackMessage(value || '');
         }
 
         if (isImageLike(result) && imageLikeToDataUrl) {
@@ -468,7 +474,7 @@ When scripting is not available or insufficient, explain the limitation clearly.
                         name: uploaded.name,
                         dataUrl: uploaded.dataUrl,
                         metadata: uploaded.metadata,
-                    });
+                    } as any);
                     continue;
                 }
 
@@ -488,7 +494,7 @@ When scripting is not available or insufficient, explain the limitation clearly.
                         name: uploaded.name,
                         dataUrl: uploaded.dataUrl,
                         metadata: uploaded.metadata,
-                    });
+                    } as any);
                     continue;
                 }
 
@@ -507,7 +513,7 @@ When scripting is not available or insufficient, explain the limitation clearly.
                         name: uploaded.name || 'script-file',
                         dataUrl: uploaded.dataUrl,
                         metadata: uploaded.metadata,
-                    });
+                    } as any);
                     continue;
                 }
 
@@ -526,22 +532,29 @@ When scripting is not available or insufficient, explain the limitation clearly.
                     ok: true,
                     type: 'script-result',
                     text: textChunks.join('\n\n'),
-                });
+                } as any);
+            }
+
+            if (!textChunks.length && parts.length) {
+                parts.unshift({
+                    type: 'host-feedback',
+                    text: 'Script produced attachment output. Read the attachment and any related metadata to answer the user.',
+                } as any);
             }
 
             if (parts.length) {
-                return {
+                return withInternalMetadata({
                     role: 'user',
                     parts,
-                    content: textChunks.join('\n\n') || 'Done.',
+                    content: textChunks.join('\n\n') || 'Script produced non-text output.',
                     createdAt: new Date(),
-                };
+                });
             }
 
-            return asPlainTextMessage(textChunks.join('\n\n') || 'Done.');
+            return asGuidanceForMissingReturn();
         }
 
-        return asPlainTextMessage(
+        return asFeedbackMessage(
             typeof result === 'object' ? JSON.stringify(result, null, 2) : String(result)
         );
     }

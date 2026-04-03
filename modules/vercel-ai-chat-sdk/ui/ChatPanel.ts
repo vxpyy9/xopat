@@ -273,6 +273,7 @@ export class ChatPanel extends BaseComponent {
                 this._modelSelectEl.appendChild(option({ value: "" }, "No models"));
                 this._modelSelectEl.value = "";
                 this._modelSelectEl.disabled = true;
+                this._updateAttachmentCapabilityState();
                 return;
             }
 
@@ -691,6 +692,8 @@ export class ChatPanel extends BaseComponent {
         const provider = this.chatService.getProvider(this._providerId);
         if (!provider) return false;
         if (provider.requiresLogin !== false && !this.chatService.isAuthenticated(this._providerId)) return false;
+        const hasModel = !!this._modelId || this._models.length > 0;
+        if (!hasModel) return false;
         return this._consentConfigured;
     }
 
@@ -958,11 +961,24 @@ export class ChatPanel extends BaseComponent {
         }
     }
 
+    _isHiddenInternalMessage(message: ChatMessage | null | undefined): boolean {
+        const metadata = (message as any)?.metadata || {};
+        return metadata.hiddenFromChatUi === true || metadata.internalSource === 'script-runtime';
+    }
+
+    _getVisibleMessages(messages: ChatMessage[]): ChatMessage[] {
+        return (messages || []).filter((message) => !this._isHiddenInternalMessage(message));
+    }
+
+    _pushInternalMessage(message: ChatMessage): void {
+        this._messages.push(message);
+    }
+
     async _loadSession(sessionId: string): Promise<void> {
         try {
             const hydration = await this.chatService.loadSession(sessionId);
             this._messages = (hydration.messages || []).map((m) => ({ ...m, createdAt: m.createdAt || new Date() }));
-            this._messageList?.setMessages(this._messages);
+            this._messageList?.setMessages(this._getVisibleMessages(this._messages));
             this._sessionPicker?.setActiveSession(hydration.session.id);
             this._updateSessionTitle(hydration.session);
 
@@ -995,8 +1011,10 @@ export class ChatPanel extends BaseComponent {
         await this._loadSession(sessionId);
     }
 
-    async _ensureActiveSession(options: { showChatView?: boolean } = {}): Promise<string> {
-        const { showChatView = true } = options;
+    async _ensureActiveSession(
+        options: { showChatView?: boolean; preserveMessages?: boolean } = {}
+    ): Promise<string> {
+        const { showChatView = true, preserveMessages = false } = options;
 
         const current = this.chatService.getActiveSessionId();
         if (current) return current;
@@ -1022,7 +1040,11 @@ export class ChatPanel extends BaseComponent {
         this._sessions = [session, ...this._sessions.filter((s) => s.id !== session.id)];
         this._sessionPicker?.setSessions(this._sessions, session.id);
         this._updateSessionTitle(session);
-        this.clearMessages();
+
+        if (!preserveMessages) {
+            this.clearMessages();
+        }
+
         this._updateSessionPickerState();
 
         if (showChatView) {
@@ -1225,7 +1247,22 @@ export class ChatPanel extends BaseComponent {
     }
 
     async _captureViewerScreenshotBlob(): Promise<Blob> {
-        const viewer = (globalThis as any).VIEWER_MANAGER?.activeViewer || (globalThis as any).VIEWER;
+        const manager = (globalThis as any).VIEWER_MANAGER;
+        const viewers = Array.isArray(manager?.viewers) ? manager.viewers : [];
+        const preferredViewerId = this._getCurrentViewerContextId();
+
+        let viewer = preferredViewerId
+            ? viewers.find((item: any) => item?.uniqueId === preferredViewerId)
+            : null;
+
+        if (!viewer && manager?.activeViewer) {
+            viewer = manager.activeViewer;
+        }
+
+        if (!viewer && viewers.length === 1) {
+            viewer = viewers[0];
+        }
+
         const canvas: HTMLCanvasElement | undefined = viewer?.drawer?.canvas || viewer?.canvas;
         if (!canvas || typeof canvas.toBlob !== "function") {
             throw new Error("No active viewer screenshot is available.");
@@ -1265,12 +1302,15 @@ export class ChatPanel extends BaseComponent {
         this._isRunning = true;
         this._stopRequested = false;
         this._turnAbortController = new AbortController();
+
+        this.addMessage(userMsg); // show immediately
+
         this._updateInputState({ keepStatus: true });
         this._setStatus("Sending request…");
 
         try {
-            await this._ensureActiveSession();
-            await this._runAssistantLoop(userMsg, this.MAX_SCRIPT_STEPS, this._turnAbortController.signal);
+            await this._ensureActiveSession({ preserveMessages: true });
+            await this._runAssistantLoop(this.MAX_SCRIPT_STEPS, this._turnAbortController.signal);
 
             if (!this._stopRequested) {
                 await this._refreshSessionsForCurrentProvider({ autoLoadLatest: false });
@@ -1281,8 +1321,20 @@ export class ChatPanel extends BaseComponent {
                 this._setStatus("Stopped.");
             }
         } catch (err) {
+            const detail = this._toErrorText(err, "The assistant could not complete this turn.");
+
             if (this.chatService?.isAbortError?.(err)) {
-                this._setStatus("Stopped.");
+                if (this._stopRequested) {
+                    this._setStatus("Stopped.");
+                } else {
+                    this._pushErrorBubble(
+                        /timeout|timed out|deadline/i.test(detail)
+                            ? "The request timed out."
+                            : "The request was interrupted.",
+                        err
+                    );
+                    this._setStatus("Turn failed.");
+                }
             } else {
                 console.error("Chat loop failed:", err);
                 this._pushErrorBubble("The assistant could not complete this turn.", err);
@@ -1314,14 +1366,12 @@ export class ChatPanel extends BaseComponent {
         return !!this._stopRequested || !!this._turnAbortController?.signal?.aborted;
     }
 
-    async _runAssistantLoop(initialMessage: ChatMessage, maxSteps: number, signal?: AbortSignal): Promise<void> {
+    async _runAssistantLoop(maxSteps: number, signal?: AbortSignal): Promise<void> {
         const chatModule = this.chat;
         let allowedSteps = Math.max(1, Number(maxSteps || this.MAX_SCRIPT_STEPS || 12));
         let extensionsUsed = 0;
         let consecutiveSuccessfulScriptSteps = 0;
 
-        this._messages.push(initialMessage);
-        this._messageList?.addMessage(initialMessage);
         this._messageList?.showProgress("Understanding your request…");
 
         try {
@@ -1349,8 +1399,9 @@ export class ChatPanel extends BaseComponent {
                 let executionMessage: ChatMessage;
                 let failedScript = false;
                 try {
-                    executionMessage = await chatModule.executeAssistantScript(script);
-                    failedScript = (executionMessage.parts || []).some((p: any) => p.type === "script-result" && p.ok === false);
+                    executionMessage = await chatModule.executeAssistantScript(script, { signal });
+                    failedScript =
+                        (executionMessage.parts || []).some((p: any) => p.type === "script-result" && p.ok === false);
 
                     if (failedScript) {
                         const errorText = executionMessage.content || "Script execution failed.";
@@ -1395,7 +1446,7 @@ export class ChatPanel extends BaseComponent {
                     consecutiveSuccessfulScriptSteps += 1;
                 }
 
-                this._messages.push(executionMessage);
+                this._pushInternalMessage(executionMessage);
                 this._messageList?.updateProgress(this._friendlyProgress(reply, executionMessage, step));
 
                 const isLastAllowedStep = step >= allowedSteps - 1;

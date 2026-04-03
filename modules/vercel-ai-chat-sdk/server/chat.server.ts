@@ -108,6 +108,22 @@ function getRegistry() {
     return ChatServerRegistry.instance();
 }
 
+async function requireSessionAccess(ctx: any, sessionId: string): Promise<ChatSessionHydration> {
+    const hydrated = await getRegistry().hydrateSession(sessionId);
+    const owner = hydrated.session.metadata?.userId ?? null;
+    const requester = ctx?.user?.id ?? null;
+
+    if (owner && requester && owner !== requester) {
+        throw new Error('Chat session does not belong to current user.');
+    }
+
+    if (owner && !requester) {
+        throw new Error('Chat session requires an authenticated user.');
+    }
+
+    return hydrated;
+}
+
 function ensureSlash(url: string): string {
     return url.endsWith('/') ? url : `${url}/`;
 }
@@ -255,7 +271,9 @@ function dataUrlToBytes(value: string | undefined | null): { bytes: Uint8Array |
 
     const mediaType = match[1] || undefined;
     const base64 = match[2] || '';
-    const buf = Buffer.from(base64, 'base64');
+    const BufferCtor = (globalThis as any)?.Buffer;
+    if (!BufferCtor?.from) return { bytes: null, mediaType };
+    const buf = BufferCtor.from(base64, 'base64');
     return { bytes: new Uint8Array(buf), mediaType };
 }
 
@@ -371,12 +389,16 @@ function scriptSystemContent(allowedScriptApi?: AllowedScriptApiManifest): strin
             const args = (method.params || []).map((p) => `${p.name}: ${p.type}`).join(', ');
             const signature = method.tsSignature || `${method.name}(${args}) => ${method.returns || 'void'}`;
             const description = method.description ? ` — ${method.description}` : '';
-            const declaration = method.tsDeclaration ? `\n    TS: ${method.tsDeclaration}` : '';
+            const declaration = method.tsDeclaration ? `
+    TS: ${method.tsDeclaration}` : '';
             return `  - ${signature}${description}${declaration}`;
         }).join('\n');
         const namespaceDescription = ns.description ? ` — ${ns.description}` : '';
-        const namespaceDeclaration = ns.tsDeclaration ? `\n  Namespace TS:\n  ${ns.tsDeclaration}` : '';
-        return `- namespace ${ns.namespace}${namespaceDescription}${namespaceDeclaration}\n${methods}`;
+        const namespaceDeclaration = ns.tsDeclaration ? `
+  Namespace TS:
+  ${ns.tsDeclaration}` : '';
+        return `- namespace ${ns.namespace}${namespaceDescription}${namespaceDeclaration}
+${methods}`;
     }).join('\n\n');
 
     return `Viewer scripting is available.
@@ -393,6 +415,12 @@ Critical output rules:
 - Do NOT say "run this script", "execute this", "here is a script", "use the API", or similar technical wording unless the user explicitly asks for technical details.
 - Your only executable output format is exactly one fenced code block tagged xopat-script like so: \`\`\`xopat-script [executable here] \`\`\`.
 - Even if the scripting definition does not say it, you need to **await** all API method calls as they are being routed through asynchronous gate.
+- You MUST explicitly \`return\` the final value that should be fed back into the conversation. The runtime only captures the async function's return value.
+- A trailing expression such as \`result;\` or \`contexts;\` is not enough. Use \`return result;\`.
+- Prefer returning plain JSON-serializable values: string, number, boolean, object, array, or null.
+- For user-facing findings, prefer returning a plain object or array with the exact fields you want to inspect next.
+- If you produce an image or file, return it together with a short textual summary when possible, for example \`return ["Viewport screenshot captured.", screenshotDataUrl, metadata];\`.
+- Do not rely on console output, side effects, or the last expression statement for feedback. Only the returned value is guaranteed to be passed back.
 - If a requested action does not map cleanly to an allowed method, do not invent a method. Ask a brief clarification question or use the closest valid method sequence.
 - Assume the application executes xopat-script automatically.
 - For non-technical users, speak naturally about the result or next step, not about the implementation mechanism.
@@ -400,7 +428,15 @@ Critical output rules:
 - Never invent namespaces or methods.
 - The script must be using plain JavaScript + the allowed scripting API only. Do NOT use TypeScript syntax.
 - Do not wrap explanations inside the code block.
+- After successful tool execution, read the returned host feedback carefully. Host feedback and script-result parts are authoritative observations from the runtime.
 - After successful tool execution, if the result contains numbers, measurements, coordinates, zoom values, ratios, or metadata, quote them directly and explain them briefly.
+
+Recommended patterns:
+- To inspect viewer contexts: \`const contexts = await application.getGlobalInfo(); return contexts.map(c => ({ contextId: c.contextId, imageName: c.imageName, serverPath: c.serverPath }));\`
+- To read metadata from the active viewer: \`const metadata = await viewer.getMetadata(); return metadata;\`
+- To select a context before viewer calls: \`await application.setActiveViewer(contextId); const metadata = await viewer.getMetadata(); return { contextId, metadata };\`
+- To capture a screenshot with metadata: \`const screenshot = await viewer.getViewportScreenshot(); const metadata = await viewer.getMetadata(); return ["Viewport screenshot captured.", screenshot, metadata];\`
+- To report annotations: \`const annotations = await annotationsRead.getAnnotations(); return annotations.map(a => ({ id: a.id, presetID: a.presetID, label: a.label }));\`
 
 If scripting is not needed, answer normally in plain user-facing language.
 
@@ -924,13 +960,13 @@ export async function listSessions(ctx: any, input?: { providerId?: string | nul
     return { sessions };
 }
 
-export async function getSession(_ctx: any, input: { sessionId: string; hydrateMessages?: boolean }): Promise<{ session: ChatSession; messages?: ChatMessage[]; attachments?: ChatAttachmentRecord[] }> {
-    const hydrated = await getRegistry().hydrateSession(input.sessionId);
+export async function getSession(ctx: any, input: { sessionId: string; hydrateMessages?: boolean }): Promise<{ session: ChatSession; messages?: ChatMessage[]; attachments?: ChatAttachmentRecord[] }> {
+    const hydrated = await requireSessionAccess(ctx, input.sessionId);
     return input.hydrateMessages === false ? { session: hydrated.session } : hydrated;
 }
 
-export async function renameSession(_ctx: any, input: { sessionId: string; title: string }): Promise<ChatSession> {
-    const hydrated = await getRegistry().hydrateSession(input.sessionId);
+export async function renameSession(ctx: any, input: { sessionId: string; title: string }): Promise<ChatSession> {
+    const hydrated = await requireSessionAccess(ctx, input.sessionId);
     return getRegistry().getSessionStore().updateSession(input.sessionId, {
         title: input.title,
         metadata: {
@@ -940,12 +976,13 @@ export async function renameSession(_ctx: any, input: { sessionId: string; title
     });
 }
 
-export async function deleteSession(_ctx: any, input: { sessionId: string }): Promise<{ ok: true }> {
+export async function deleteSession(ctx: any, input: { sessionId: string }): Promise<{ ok: true }> {
+    await requireSessionAccess(ctx, input.sessionId);
     await getRegistry().getSessionStore().deleteSession(input.sessionId);
     return { ok: true };
 }
 
-export async function uploadAttachment(_ctx: any, input: {
+export async function uploadAttachment(ctx: any, input: {
     sessionId: string;
     kind?: 'image' | 'file' | 'screenshot';
     name?: string;
@@ -953,6 +990,8 @@ export async function uploadAttachment(_ctx: any, input: {
     dataBase64: string;
     metadata?: Record<string, unknown>;
 }): Promise<ChatAttachmentRecord> {
+    await requireSessionAccess(ctx, input.sessionId);
+
     const record: ChatAttachmentRecord = {
         id: getRegistry().newId('att'),
         sessionId: input.sessionId,
@@ -967,10 +1006,10 @@ export async function uploadAttachment(_ctx: any, input: {
     return getRegistry().getSessionStore().uploadAttachment(record);
 }
 
-export async function appendMessages(_ctx: any, input: { sessionId: string; messages: ChatMessage[] }): Promise<{ messages: ChatMessage[] }> {
+export async function appendMessages(ctx: any, input: { sessionId: string; messages: ChatMessage[] }): Promise<{ messages: ChatMessage[] }> {
+    const hydrated = await requireSessionAccess(ctx, input.sessionId);
     const messages = input.messages.map(normalizeIncomingMessage);
     const appended = await getRegistry().getSessionStore().appendMessages(input.sessionId, messages);
-    const hydrated = await getRegistry().hydrateSession(input.sessionId);
     const hasManualTitle = !!hydrated.session.metadata?.manualTitle;
 
     if (!hasManualTitle) {
@@ -1029,7 +1068,7 @@ export async function sendTurn(ctx: any, input: SendTurnInput): Promise<ChatTurn
 
     const registry = getRegistry();
     const sessionStore = registry.getSessionStore();
-    const hydrated = await registry.hydrateSession(input.sessionId);
+    const hydrated = await requireSessionAccess(ctx, input.sessionId);
     const session = hydrated.session;
     const runtime = await registry.getProviderRuntime(session.providerId);
     const adapter = registry.getAdapter(runtime.type.adapter);
@@ -1048,21 +1087,22 @@ export async function sendTurn(ctx: any, input: SendTurnInput): Promise<ChatTurn
         modelId: session.modelId,
         contextId: session.contextId || null,
     });
-
     const mergedSystemContent = [
         sessionPreamble(runtime.instance.label, input.allowedScriptApi),
-        `Active personality: ${personality.label}\n\n${input.personalityPrompt || personality.systemPrompt}`,
+        `Active personality: ${personality.label}
+
+${input.personalityPrompt || personality.systemPrompt}`,
         scriptSystemContent(input.allowedScriptApi),
     ]
-        .map((x) => String(x || "").trim())
+        .map((x) => String(x || '').trim())
         .filter(Boolean)
-        .join("\n\n---\n\n");
+        .join("\n---\n");
 
     const systemMessages = mergedSystemContent
         ? [toModelMessage({
-            role: "system",
+            role: 'system',
             content: mergedSystemContent,
-            parts: [{ type: "text", text: mergedSystemContent }],
+            parts: [{ type: 'text', text: mergedSystemContent }],
             createdAt: new Date().toISOString(),
         } as ChatMessage, attachmentIndex)]
         : [];

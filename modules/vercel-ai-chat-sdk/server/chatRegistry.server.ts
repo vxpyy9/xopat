@@ -17,7 +17,7 @@ export interface ChatProviderAdapterRuntimeArgs extends ServerProviderRuntimeCon
 
 export interface ChatProviderAdapter {
     id: string;
-    listModels?: (args: Omit<ChatProviderAdapterRuntimeArgs, 'modelId'> & { draftConfig?: Record<string, unknown>; draftSecrets?: Record<string, unknown> }) => Promise<ChatProviderModelInfo[]> | ChatProviderModelInfo[];
+    listModels?: (args: ChatProviderAdapterRuntimeArgs & { draftConfig?: Record<string, unknown>; draftSecrets?: Record<string, unknown> }) => Promise<ChatProviderModelInfo[]> | ChatProviderModelInfo[];
     resolveModel: (args: ChatProviderAdapterRuntimeArgs) => Promise<LanguageModel> | LanguageModel;
 }
 
@@ -112,6 +112,8 @@ class InMemoryChatSessionStore implements ChatSessionStore {
     }
 
     async appendMessages(sessionId: string, messages: ChatMessage[]): Promise<ChatMessage[]> {
+        const session = this.sessions.get(sessionId);
+        if (!session) throw new Error(`Unknown session '${sessionId}'.`);
         const existing = this.messages.get(sessionId) || [];
         const normalized = messages.map((m) => ({
             ...m,
@@ -121,10 +123,7 @@ class InMemoryChatSessionStore implements ChatSessionStore {
         }));
         existing.push(...normalized);
         this.messages.set(sessionId, existing);
-        const session = this.sessions.get(sessionId);
-        if (session) {
-            this.sessions.set(sessionId, { ...session, updatedAt: new Date().toISOString() });
-        }
+        this.sessions.set(sessionId, { ...session, updatedAt: new Date().toISOString() });
         return normalized;
     }
 
@@ -133,13 +132,12 @@ class InMemoryChatSessionStore implements ChatSessionStore {
     }
 
     async uploadAttachment(record: ChatAttachmentRecord): Promise<ChatAttachmentRecord> {
+        const session = this.sessions.get(record.sessionId);
+        if (!session) throw new Error(`Unknown session '${record.sessionId}'.`);
         const existing = this.attachments.get(record.sessionId) || [];
         existing.push(record);
         this.attachments.set(record.sessionId, existing);
-        const session = this.sessions.get(record.sessionId);
-        if (session) {
-            this.sessions.set(record.sessionId, { ...session, updatedAt: new Date().toISOString() });
-        }
+        this.sessions.set(record.sessionId, { ...session, updatedAt: new Date().toISOString() });
         return record;
     }
 

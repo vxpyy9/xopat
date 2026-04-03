@@ -1,5 +1,110 @@
 import type { ScriptApiObject } from "../scripting-manager";
 
+// TODO: Some of the types below are double-defined in the ambient types.
+//   this is due to the fact that script types are consumed and fed to the
+//   scripting manager, which is not aware of the ambient types. Design a way to pull
+//   the ambient types into the scripting manager, so that they can be used in the
+//   scripting context.
+
+/**
+ * Arbitrary Data identifier such that image server can understand it (most often UUID4 or file paths, but might be an object
+ * if certain `TileSource` uses more complex syntax). The value is passed to TileSource::supports() check to select
+ * the target protocol handler. Provide a value for your tile source which talks to the server of your choice.
+ */
+export type DataID = string | Record<string, any>;
+
+/**
+ * Data Specification is the virtual representation of the data item. It can either directly specify the data item,
+ * or, it can contain a more-broad data specification overriding the default behavior of the data source integration.
+ */
+export type DataSpecification = DataID | DataOverride;
+
+/**
+ * A more holistic data specification, which can provide custom options for the target protocol (underlying TileSource API),
+ * and override the default fetching behavior (e.g. to use a custom data source). Usage of this object is not allowed in secure mode.
+ * @property dataID actual data value, required - its presence is used to identify this object is DataOverride type
+ * @property options passed to the data source integration logics - TileSource class
+ * @property microns size of pixel in micrometers, default `undefined`,
+ * @property micronsX horizontal size of pixel in micrometers, default `undefined`, if general value not specified must have both X,Y
+ * @property micronsY vertical size of pixel in micrometers, default `undefined`, if general value not specified must have both X,Y
+ * @property protocol see protocol construction in README.md in advanced details - TODO, standardize this and document here, problem with data[] vs data...
+ * @property tileSource a tileSource object, can be provided by a plugin or a module, not available through session configuration, not serialized;
+ *    the object needs to be deduced from available dataReference and possibly protocol value realtime before the viewer loads
+ */
+export interface DataOverride {
+    dataID: DataID;
+    options?: SlideSourceOptions;
+    microns?: number;
+    micronsX?: number;
+    micronsY?: number;
+    protocol?: string;
+    tileSource?: OpenSeadragon.TileSource;
+}
+
+/**
+ * Ggeneric value map, where some values are already pre-defined:
+ * @property format the desired format to use, can be arbitrary but when sources can, it's optimal to support
+ *   browser-standard values like png, tiff, jpeg/jpg
+ */
+export interface SlideSourceOptions {
+    format?: string;
+    [key: string]: any;
+}
+
+/**
+ * @property dataReference index to the `data` array, can be only one unlike in `shaders`, required - marks the target data item others refer to (e.g. in measurements)
+ * @property shaders array of optional rendering specification
+ * @property protocol deprecated, use DataOverride instead
+ * @property name custom tissue name, default the tissue path
+ * @property goalIndex preferred visualization index for this background, overrides `activeVisualizationIndex`
+ * @property id unique ID for the background, created automatically from data path if not defined
+ */
+export interface BackgroundItem {
+    dataReference: number | DataSpecification;
+    shaders?: VisualizationShaderLayer[];
+    protocol?: string;
+    name?: string;
+    goalIndex?: number;
+    id?: string;
+    options?: SlideSourceOptions;
+    [key: string]: any;
+}
+
+/**
+ * Like BackgroundItem, but instead of dataReference, it contains a DataSpecification object.
+ * @property dataReference actual value of the data item. Used when processing offscreen data for
+ * session-unrelated things (such as thumbnail preview for custom data).
+ */
+export interface StandaloneBackgroundItem extends BackgroundItem {
+    dataReference: DataSpecification;
+}
+
+
+/**
+ * @property shaders array of shader specifications
+ * @property protocol deprecated, use DataOverride instead
+ * @property name custom tissue name, default the tissue path
+ * @property goalIndex preferred visualization index for this background, overrides `activeVisualizationIndex`
+ */
+export interface VisualizationItem {
+    shaders?: Record<string, VisualizationShaderLayer>;
+    protocol?: string;
+    name?: string;
+    goalIndex?: number;
+    [key: string]: any;
+}
+
+export interface VisualizationShaderLayer {
+    type?: string;
+    id?: string;
+    // Data References come from outside, point to data array spec
+    dataReferences?: number[];
+    // Tiled image references, point to actual TIs loaded at the viewer world
+    tiledImages?: number[];
+    name?: string;
+    [key: string]: any;
+}
+
 export type VisualizationDocsControl = {
     name: string;
     supportedUiTypes: string[];

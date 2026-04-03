@@ -1,6 +1,4 @@
 export { }; // This line forces TS to treat this as a module
-// Shared ambient types (BackgroundItem, DataID, ApplicationContext, etc.)
-// are declared in src/types/shared.d.ts (no export{}) and hence globally visible.
 
 declare global {
     // Runtime-provided globals available throughout the application

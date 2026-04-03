@@ -16,10 +16,7 @@ ScriptingManager.registerExternalApi(
                 "Write Annotations",
                 "Create and modify annotations, comments, presets, and preset visuals for the viewer bound to the current script context. Usually the viewer should be first selected for this script context by application.setActiveViewer(contextId)."
             );
-
-            // Tune these for the interactive viewer budget.
-            this.MAX_SCRIPT_ANNOTATIONS_TOTAL = 250;
-            this.MAX_SCRIPT_ANNOTATIONS_PER_CALL = 50;
+            this.MAX_SCRIPT_ANNOTATIONS_PER_CALL = 10;
         }
 
         _getModule() {
@@ -184,23 +181,19 @@ ScriptingManager.registerExternalApi(
             );
         }
 
-        _assertCreateBudget(incomingCount) {
-            const current = this._listLiveAnnotations().length;
-
+        async _assertCreateBudget(incomingCount) {
             if (incomingCount > this.MAX_SCRIPT_ANNOTATIONS_PER_CALL) {
-                throw new Error(
-                    `Too many annotations requested in one scripting call (${incomingCount}). ` +
-                    `Maximum per call is ${this.MAX_SCRIPT_ANNOTATIONS_PER_CALL}. ` +
-                    `Use the future bulk annotation API for larger imports.`
-                );
-            }
-
-            if (current + incomingCount > this.MAX_SCRIPT_ANNOTATIONS_TOTAL) {
-                throw new Error(
-                    `Interactive annotation limit exceeded. Current count is ${current}, requested ${incomingCount}, ` +
-                    `maximum allowed is ${this.MAX_SCRIPT_ANNOTATIONS_TOTAL}. ` +
-                    `Use the future bulk annotation API for larger imports.`
-                );
+                await this.requireActionConsent({
+                    title: "Allow annotations?",
+                    description: `The script wants to add more than ${this.MAX_SCRIPT_ANNOTATIONS_PER_CALL} annotations at once.`,
+                    details: [
+                        "Allowing this script to add more than one annotation at once may pollute the workspace or cause performance issues.",
+                    ],
+                    mode: "warning",
+                    confirmLabel: "Add",
+                    cancelLabel: "Block",
+                    rejectedMessage: `Adding ${incomingCount} annotations was blocked by the user.`,
+                });
             }
         }
 
@@ -332,15 +325,8 @@ ScriptingManager.registerExternalApi(
             return annotation;
         }
 
-        getCreateLimit() {
-            return {
-                maxTotalAnnotations: this.MAX_SCRIPT_ANNOTATIONS_TOTAL,
-                maxPerCall: this.MAX_SCRIPT_ANNOTATIONS_PER_CALL
-            };
-        }
-
-        createAnnotation(input) {
-            this._assertCreateBudget(1);
+        async createAnnotation(input) {
+            await this._assertCreateBudget(1);
 
             const fabric = this._getFabric();
             const annotation = this._buildAnnotationFromInput(input);
@@ -353,11 +339,11 @@ ScriptingManager.registerExternalApi(
             return this._serializeAnnotation(annotation);
         }
 
-        createAnnotations(inputs) {
+        async createAnnotations(inputs) {
             const items = Array.isArray(inputs) ? inputs : [];
             if (items.length === 0) return [];
 
-            this._assertCreateBudget(items.length);
+            await this._assertCreateBudget(items.length);
 
             const fabric = this._getFabric();
             const annotations = items.map((input) => this._buildAnnotationFromInput(input));

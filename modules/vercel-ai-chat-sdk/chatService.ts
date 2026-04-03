@@ -411,17 +411,30 @@ export class ChatService {
 
     _updateSingleModelCapabilities(providerId: string, modelId: string, capabilities: ModelCapabilities): void {
         const models = this._modelCatalog.get(providerId) || [];
-        const next = models.map((m) =>
-            m.id === modelId
-                ? {
-                    ...m,
-                    capabilities,
-                    supportsImages: capabilities.images === 'supported',
-                    supportsFiles: capabilities.files === 'supported',
-                    multimodal: capabilities.images === 'supported' || capabilities.files === 'supported',
-                }
-                : m
-        );
+        let found = false;
+        const next = models.map((m) => {
+            if (m.id !== modelId) return m;
+            found = true;
+            return {
+                ...m,
+                capabilities,
+                supportsImages: capabilities.images === 'supported',
+                supportsFiles: capabilities.files === 'supported',
+                multimodal: capabilities.images === 'supported' || capabilities.files === 'supported',
+            };
+        });
+
+        if (!found) {
+            next.push({
+                id: modelId,
+                label: modelId,
+                capabilities,
+                supportsImages: capabilities.images === 'supported',
+                supportsFiles: capabilities.files === 'supported',
+                multimodal: capabilities.images === 'supported' || capabilities.files === 'supported',
+            });
+        }
+
         this._modelCatalog.set(providerId, next);
     }
 

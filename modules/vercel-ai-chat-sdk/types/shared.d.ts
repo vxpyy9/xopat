@@ -1,5 +1,15 @@
 type ChatRole = 'system' | 'user' | 'assistant' | 'tool';
 
+type CapabilityState = 'supported' | 'unsupported' | 'unknown';
+
+type ModelCapabilities = {
+    text: CapabilityState;
+    images: CapabilityState;
+    files: CapabilityState;
+    source: 'probe' | 'provider-metadata' | 'manual' | 'default';
+    checkedAt?: string;
+};
+
 interface ChatPersonality {
     id: string;
     label: string;
@@ -92,6 +102,7 @@ interface ChatProviderModelInfo {
     supportsFiles?: boolean;
     supportsImages?: boolean;
     supportsToolCalls?: boolean;
+    capabilities?: ModelCapabilities;
 }
 
 type ChatProviderFieldInput = 'text' | 'password' | 'url' | 'textarea' | 'number' | 'boolean' | 'select';

@@ -1,4 +1,4 @@
-export type XOpatClientConfig = {
+type XOpatClientConfig = {
     domain: string | null;
     path: string | null;
     image_group_server: string;
@@ -15,13 +15,13 @@ export type XOpatClientConfig = {
     production?: boolean | null;
 };
 
-export type ViewportSetup = {
+type ViewportSetup = {
     zoomLevel?: number;
     point?: { x: number; y: number };
     rotation?: number;
 }
 
-export type XOpatSetup = {
+type XOpatSetup = {
     sessionName?: string | null;
     locale?: string | null;
     customBlending?: boolean | null;
@@ -51,7 +51,7 @@ export type XOpatSetup = {
     maxMobileWidthPx?: number | null;
 };
 
-export type XOpatServerProxyAuthJwt = {
+type XOpatServerProxyAuthJwt = {
     secret?: string;
     issuer?: string;
     audience?: string;
@@ -59,20 +59,20 @@ export type XOpatServerProxyAuthJwt = {
     userClaimHeader?: string;
 };
 
-export type XOpatServerProxyAuth = {
+type XOpatServerProxyAuth = {
     enabled?: boolean;
     verifiers?: string[];
     mode?: "all" | "any";
     jwt?: XOpatServerProxyAuthJwt;
 };
 
-export type XOpatServerProxy = {
+type XOpatServerProxy = {
     baseUrl: string;
     headers?: Record<string, string>;
     auth?: XOpatServerProxyAuth;
 };
 
-export type XOpatServerConfig = {
+type XOpatServerConfig = {
     name: string | null;
     supportsPost: boolean;
     secure?: {
@@ -80,7 +80,7 @@ export type XOpatServerConfig = {
     };
 };
 
-export type XOpatCoreConfig = {
+type XOpatCoreConfig = {
     name: string;
     version: string;
     gateway: string;
@@ -99,7 +99,7 @@ export type XOpatCoreConfig = {
 /**
  * The record as defined in include.json file
  */
-export type XOpatElementItem = {
+type XOpatElementItem = {
     id: string;
     /** Human readable name */
     name?: string;
@@ -119,7 +119,7 @@ export type XOpatElementItem = {
 /**
  * The internal representation in the app, extends XOpatElementItem
  */
-export interface XOpatElementInternalRecord extends XOpatElementItem {
+interface XOpatElementInternalRecord extends XOpatElementItem {
     /** Instantiated class reference */
     instance?: XOpatElementClass;
     loaded: boolean;
@@ -128,12 +128,21 @@ export interface XOpatElementInternalRecord extends XOpatElementItem {
     styleSheet?: string;
 }
 
-export interface XOpatVisualizationConfig {
+/**
+ * The viewer session configuration.
+ */
+interface XOpatSessionConfig {
     params?: Record<string, unknown>;
     data?: DataSpecification[];
     background?: BackgroundItem[];
     visualizations?: VisualizationItem[];
     plugins?: Record<string, unknown>;
+}
+
+/**
+ * The internal session configuration of the application.
+ */
+interface XOpatRuntimeConfig extends XOpatSessionConfig {
     error?: string;
     description?: string;
     details?: string;

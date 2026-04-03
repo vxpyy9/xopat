@@ -198,19 +198,14 @@ export type AnnotationCreateLimit = {
 
 export interface AnnotationsWriteScriptApi extends ScriptApiObject {
     /**
-     * Returns the interactive scripting guard for annotation creation.
-     */
-    getCreateLimit(): AnnotationCreateLimit;
-
-    /**
      * Creates one annotation using the given factory-specific parameters.
      */
-    createAnnotation(input: AnnotationCreateInput): AnnotationRecord;
+    createAnnotation(input: AnnotationCreateInput): Promise<AnnotationRecord>;
 
     /**
      * Creates multiple annotations, subject to the interactive guard.
      */
-    createAnnotations(inputs: AnnotationCreateInput[]): AnnotationRecord[];
+    createAnnotations(inputs: AnnotationCreateInput[]): Promise<AnnotationRecord[]>;
 
     /**
      * Deletes one annotation by persistent id, increment id, or internal id.
