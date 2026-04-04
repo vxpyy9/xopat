@@ -1,7 +1,7 @@
 class ICCProfile extends window.XOpatModuleSingleton {
 
     constructor() {
-        super("icc-profiles");
+        super();
 
         this.profileState = new Map();
         this.getCtx = (contextId) => {
@@ -329,4 +329,4 @@ function drawDelta(beforeCanvas, afterCanvas, deltaCanvas) {
     dctx.putImageData(new ImageData(out, w, h), 0, 0);
 }
 ICCProfile.instance();
-
+addModule('icc-profiles', ICCProfile);

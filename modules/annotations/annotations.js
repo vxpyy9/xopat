@@ -26,7 +26,7 @@
 window.OSDAnnotations = class extends XOpatModuleSingleton {
 
     constructor() {
-        super("annotations");
+        super();
         this.version = "0.0.1";
         this.session = this.version + "_" + Date.now();
 
@@ -2257,3 +2257,5 @@ OSDAnnotations.StateEditSelection = class extends OSDAnnotations.AnnotationState
         return this.context.hasOngoingEdit() ? oldViewer === newViewer : false;
     }
 };
+
+addModule('annotations', OSDAnnotations);

@@ -137,7 +137,7 @@ static ROOT;
 ````
 
 #### `XOpatPlugin::constructor(id, params)`
-The plugin main class is given it's `id` and `params` object (dynamic metadata), make sure to call `super(id);`. `params` object
+The plugin main class is given it's `id` and `params` object (dynamic metadata). `params` object
 is integrated within the system and gets exported in the viewer configuration - such information is available when 
 sharing the plugin
 exports.
@@ -347,6 +347,13 @@ And also other available modules. Each module provides it's own way of enriching
 such as pre-defined color maps, (already mentioned) webgl processing, fabricJS canvas, JSON to HTML parser, 
 annotation logic, HTML sanitization, vega graphs, threading worker or keyframe snapshots.   
 
+> #### Note on `XOpatViewerSingleton`
+> The `XOpatViewerSingleton` is not a module nor plugin (do not confuse it like so), it is utility class instantiated per viewer.
+> Unlike plugins, you need to call ``registerViewerSingleton(XOpatModuleViewerSingleton)``.
+> Multiple such classes can exist within a plugin, as they do not define a plugin.
+> Instead of ``registerViewerSingleton``, you can call `requireViewerSingletonPresence`
+> to ensure that the singleton is instantiated along with each viewer without explicitly telling it so.
+
 ### Available Third-party Code and UI
 - You should use new UI components, see [this](../../../../../Repos/xopat-shadowaya/ui/README.md)
 
@@ -388,7 +395,17 @@ There can be multiple viewers open at once. You might need to create:
 ### ``XOpatViewerSingleton``
 The `XOpatViewerSingleton` exists one per active viewer, and have ``destroy()`` you can use to react on viewer context being lost. By default, instances ARE NOT
 created, only when one requests the instance with ```MyViewerSingleton.instance(viewerRefOrViewerUID)```. If you want to force
-instance creation per viewer automatically, call ``requireViewerSingletonPresence(MyViewerSingleton).``
+instance creation per viewer automatically, call ``requireViewerSingletonPresence(MyViewerSingleton)``.
+
+For dynamically or lazily loaded singletons, use the loader helper APIs. Ensure that `className` accurately matches the expected context context:
+
+````js
+this.integrateWithViewerSingletonModule('MyViewerSingleton', viewerRef, async (module) => {
+    //...
+});
+
+const mod = viewerSingletonModule('MyViewerSingleton', viewerRef);
+````
 
 ## Dynamic Loading
 As workers and js modules (recommended usage), the viewer does not offer advanced tools for

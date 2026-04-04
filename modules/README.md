@@ -40,6 +40,18 @@ Moreover, it is advised to use ENV setup (see `/env/README.md`) to override nece
 - `enabled` is an option to allow or disallow the module to be loaded into the system, default `true`
 - `permaLoad` always loads the module within the system if set to `true`, default `false`
 
+## Plain Modules
+Any code can be a module. You can clone a npm package and export as xopat module (there is a task for it).
+You can add requirement for another module and just extend/integrate new feature. You can
+export global window variable. And so on. Note though, that due to loosely coupled architecture,
+you should think about how other access your code - usually, you want to attach to a global variable or namespace.
+
+## xOpat Modules
+xOpat modules bring powerful features - configurable options, IO support, and more - the list is below.
+Modules can be defined JUST ONCE per a module, and the module class is auto-exported as ``xmodules`` variable.
+The list of features is below. Similar to plugins, you need to call ``addModule(id, Class)`` to register the module.
+
+
 ##### Built-in options
 Unlike plugins, module options are usually built-in centered, or used to cache values - vales
 are actually not stored anywhere, unless the cache itself is being persisted by overriding xOpat storage API.
@@ -126,6 +138,13 @@ static instance();
  */
 static instantiated();
 ````
+
+> #### Note on `XOpatViewerSingleton`
+> The `XOpatViewerSingleton` is not a module (do not confuse it like so), it is instantiated per viewer.
+> Unlike modules, you need to call ``registerViewerSingleton(XOpatModuleViewerSingleton)``.
+> Multiple such classes can exist within a module, as they do not define a module.
+> Instead of ``registerViewerSingleton``, you can call `requireViewerSingletonPresence`
+> to ensure that the singleton is instantiated along with each viewer without explicitly telling it so.
 
 ### Selected global API functions
 #### `APPLICATION_CONTEXT::getOption(key, defaultValue=undefined)`
@@ -255,5 +274,17 @@ The `XOpatViewerSingleton` or `XOpatViewerSingletonModule` comes with helper API
 or rather offer single module `XOpatModuleSingleton` interface that internally owns multiple `XOpatViewerSingleton`s, which is usually nicer to users. These classes
 exists one per active viewer, and have ``destroy()`` you can use to react on viewer context being lost. By default, instances ARE NOT
 created, only when one requests the instance with ```MyViewerSingleton.instance(viewerRefOrViewerUID)```. If you want to force
-instance creation per viewer automatically, call ``requireViewerSingletonPresence(MyViewerSingleton).``
+instance creation per viewer automatically, call ``requireViewerSingletonPresence(MyViewerSingleton)``.
+
+For dynamically or lazily loaded singletons, use the loader helper APIs (similar to global singletons). Ensure that `className` accurately matches the expected context:
+
+````js
+// Wait for instance creation for a specific viewer
+this.integrateWithViewerSingletonModule('MyViewerSingleton', viewerRef, async (module) => {
+    //...
+});
+
+// Or attempt directly fetching it
+const mod = viewerSingletonModule('MyViewerSingleton', viewerRef);
+````
 

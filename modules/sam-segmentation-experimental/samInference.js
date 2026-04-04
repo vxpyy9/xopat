@@ -6,7 +6,7 @@
  */
 class SAMInference extends XOpatModuleSingleton {
   constructor() {
-    super("sam-segmentation-experimental");
+    super();
     this._models = {};
     this._processors = {};
     this._modelsLoaded = false;
@@ -440,3 +440,4 @@ class SAMInference extends XOpatModuleSingleton {
 
 // Register the module
 window.SAMInference = SAMInference;
+addModule("sam-segmentation-experimental", SAMInference);

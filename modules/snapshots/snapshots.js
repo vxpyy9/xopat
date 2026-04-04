@@ -2,7 +2,7 @@
 
 window.OpenSeadragon.Snapshots = class extends XOpatModuleSingleton {
     constructor() {
-        super("snapshots");
+        super();
         this.initPostIO();
 
         // expose a small helper for the export link above
@@ -316,3 +316,5 @@ window.OpenSeadragon.Snapshots = class extends XOpatModuleSingleton {
         return true;
     }
 };
+
+addModule("snapshots", OpenSeadragon.Snapshots);

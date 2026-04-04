@@ -1,10 +1,10 @@
 import type { XOpatCoreConfig, XOpatElementRecord } from "./types/config";
 import { type StorageLike, type AsyncStorageLike, XOpatStorage } from "./store";
-import type { OpenEvent } from "openseadragon";
+import type { OpenEvent, ViewerEventMap } from "openseadragon";
 
 import { HTTPError } from "./classes/http-client";
 import { BackgroundConfig } from "./classes/background-config";
-import type { ImageLike } from "./types/misc";
+
 
 /** Token symbols for internal element storage */
 const STORE_TOKEN = Symbol("XOpatElementDataStore");
@@ -255,15 +255,37 @@ export function initXOpatLoader(ENV: XOpatCoreConfig, PLUGINS: Record<string, XO
     }
 
     /**
-     * Get a module singleton reference if instantiated.
+     * Get a module singleton reference if instantiated or instantiate it if available.
      * @param id module id
-     * @param viewer if provided, viewer-context-dependent instance (XOpatViewerSingleton) is fetched
      */
-    const singletonModule = (window as any).singletonModule = function (id: string, viewer?: ViewerLikeItem) {
-        if (viewer !== undefined) {
-            return VIEWER_MANAGER._getSingleton(id, viewer);
+    const singletonModule = (window as any).singletonModule = function (id: string) {
+        let instance = MODULES[id]?.instance;
+        if (!instance) {
+            const exportsObj = (window as any).xmodules?.[id] || (window as any).xmodules?.[id.replace(/-/g, '')];
+            const Ctor = exportsObj?.default || exportsObj;
+            if (Ctor && typeof Ctor.instance === 'function') {
+                instance = Ctor.instance();
+            }
         }
-        return MODULES[id]?.instance;
+        return instance;
+    };
+
+    /**
+     * Get a viewer module singleton reference if instantiated or instantiate it if available.
+     * @param className module className, name of the class as a string, e.g. "MyViewerModule"
+     * @param viewer which viewer-context-dependent instance (XOpatViewerSingleton) is fetched
+     */
+    const viewerSingletonModule = (window as any).viewerSingletonModule = function (className: string, viewer: ViewerLikeItem) {
+        const id = "ViewerInstance::" + className;
+        let instance = VIEWER_MANAGER._getSingleton(id, viewer);
+        if (!instance) {
+            const exportsObj = (window as any).xmodules?.[id] || (window as any).xmodules?.[id.replace(/-/g, '')];
+            const Ctor = exportsObj?.default || exportsObj;
+            if (Ctor && typeof Ctor.instance === 'function') {
+                instance = Ctor.instance(viewer);
+            }
+        }
+        return instance;
     };
 
     /**
@@ -272,6 +294,7 @@ export function initXOpatLoader(ENV: XOpatCoreConfig, PLUGINS: Record<string, XO
      * @param PluginClass class/class-like-function to register (not an instance!)
      */
     const addPlugin = (window as any).addPlugin = function (id: string, PluginClass: XOpatPluginClass) {
+        (PluginClass as any).$id = id;
         let plugin = instantiatePlugin(id, PluginClass);
         if (!plugin) return;
 
@@ -283,12 +306,43 @@ export function initXOpatLoader(ENV: XOpatCoreConfig, PLUGINS: Record<string, XO
     };
 
     /**
+     * Register a module globally. This ensures the module class is present in 
+     * `window.xmodules`, allowing dynamic lazy-instantiation across the system. 
+     * Strongly recommended for all modules.
+     * @param id module id
+     * @param ModuleClass class/class-like-function to register (not an instance!)
+     */
+    const addModule = (window as any).addModule = function (id: string, ModuleClass: any) {
+        if (!id || !ModuleClass) return;
+        ModuleClass.$id = id;
+        let xmods = (window as any).xmodules = (window as any).xmodules || {};
+        xmods[id] = ModuleClass;
+    };
+
+    /**
+     * Register viewer singleton globally.
+     * @param SingletonClass The viewer singleton class
+     * @param className The class name representing this viewer singleton, optional, can override the default 'SingletonClass'
+     */
+    const registerViewerSingleton = (window as any).registerViewerSingleton = function (SingletonClass: any, className?: string) {
+        if (!SingletonClass) return;
+        const id = "ViewerInstance::" + (String(SingletonClass) || className);
+        SingletonClass.$className = className;
+        SingletonClass.$id = id;
+        let xmods = (window as any).xmodules = (window as any).xmodules || {};
+        xmods[id] = SingletonClass;
+    };
+
+    /**
      * Force the SingletonClass class definition to be instantiated automatically per active viewer.
      */
     const requireViewerSingletonPresence = (window as any).requireViewerSingletonPresence = function (SingletonClass: XOpatViewerSingletonClass) {
         if (!(SingletonClass.prototype instanceof XOpatViewerSingleton)) {
             console.error("Invalid singleton class", SingletonClass);
             return;
+        }
+        if (!(SingletonClass as any).$id) {
+            registerViewerSingleton(SingletonClass);
         }
         REQUIRED_SINGLETONS.add(SingletonClass);
         if (window.VIEWER_MANAGER) {
@@ -565,9 +619,10 @@ export function initXOpatLoader(ENV: XOpatCoreConfig, PLUGINS: Record<string, XO
          * @param {XOpatElementID} id
          * @param {('plugin'|'module')} executionContextName
          */
-        constructor(id: XOpatElementID, executionContextName: XOpatExecutionContext) {
+        constructor(id: XOpatElementID | undefined, executionContextName: XOpatExecutionContext) {
             super();
 
+            id = id || (this.constructor as any).$id;
             if (!id) throw `Trying to instantiate an element '${this.constructor.name || this.constructor}' - no id given.`;
             this.__id = id;
             this.__uid = `${executionContextName}.${id}`;
@@ -853,27 +908,33 @@ export function initXOpatLoader(ENV: XOpatCoreConfig, PLUGINS: Record<string, XO
 
         /**
          * TODO: this does not wait once module is fully loaded!
-         * @param {string} moduleId
-         * @param {{ (module: XOpatModuleSingleton | XOpatViewerSingletonModule): void }} callback
-         * @param {ViewerLikeItem} [viewer] - if defined, XOpatViewerSingletonModule is listened for given
-         * the desired viewer in question, otherwise global XOpatModuleSingleton
-         * @return {boolean} true if finished immediatelly, false if registered handler for the
-         * future possibility of the module being loaded
          */
-        integrateWithSingletonModule(moduleId: string, callback: (module: any) => void, viewer: ViewerLikeItem | undefined = undefined) {
+        integrateWithSingletonModule(moduleId: string, callback: (module: IXOpatModuleSingleton) => void) {
             const targetModule = singletonModule(moduleId);
             if (targetModule) {
                 callback(targetModule);
                 return true;
             }
             VIEWER_MANAGER.addHandler('module-singleton-created', (e: ModuleSingletonCreatedEvent) => {
-                if (viewer) {
-                    viewer = VIEWER_MANAGER.ensureViewer(viewer);
-                    // call also if viewer event arg undefined -> user might missed the usage
-                    if (e.id === moduleId && (e.viewer === viewer || e.viewer) === undefined) callback(e.module);
-                } else {
-                    if (e.id === moduleId) callback(e.module);
-                }
+                if (e.id === moduleId) callback(e.module);
+            });
+            return false;
+        }
+
+        /**
+         * TODO: this does not wait once module is fully loaded!
+         */
+        integrateWithViewerSingletonModule(className: string, viewer: ViewerLikeItem, callback: (module: IXOpatViewerSingletonModule) => void) {
+            const targetModule = viewerSingletonModule(className, viewer);
+            if (targetModule) {
+                callback(targetModule);
+                return true;
+            }
+
+            const id = "ViewerInstance::" + className;
+            VIEWER_MANAGER.addHandler('module-singleton-created', (e: ModuleSingletonCreatedEvent) => {
+                viewer = VIEWER_MANAGER.ensureViewer(viewer);
+                if (e.id === id && e.viewer === viewer) callback(e.module as IXOpatViewerSingletonModule);
             });
             return false;
         }
@@ -1085,8 +1146,8 @@ export function initXOpatLoader(ENV: XOpatCoreConfig, PLUGINS: Record<string, XO
      */
     const XOpatModule = (window as any).XOpatModule = class extends XOpatElement implements IXOpatModule {
 
-        constructor(id: string) {
-            super(id, "module");
+        constructor() {
+            super(undefined, "module");
         }
 
         /**
@@ -1173,19 +1234,24 @@ export function initXOpatLoader(ENV: XOpatCoreConfig, PLUGINS: Record<string, XO
          * Create singleton with ID of the module.
          * The ID must be the module id defined in configuration.
          */
-        constructor(id: string) {
-            super(id);
+        constructor() {
+            super();
             const staticContext = (this.constructor as any);
             if (staticContext.__self) {
                 throw `Trying to instantiate a singleton. Instead, use ${staticContext.name}::instance().`;
             }
             staticContext.__self = this;
 
-            const modRef = MODULES[id];
+            const modRef = MODULES[this.id];
             if (!modRef) {
                 throw `Trying to instantiate a module that is not registered!`;
             }
             modRef.instance = this;
+
+            const exportedClass = ((window as any).xmodules || {})[this.id];
+            if (!exportedClass) {
+                console.warn(`Module '${this.id}' is missing from window.xmodules! Ensure you registered it via addModule('${this.id}', ClassName).`);
+            }
 
             // Await event necessary to fire after instantiation, do in async context
             /**
@@ -1194,7 +1260,7 @@ export function initXOpatLoader(ENV: XOpatCoreConfig, PLUGINS: Record<string, XO
              * @event module-singleton-created
              */
             setTimeout(() => VIEWER_MANAGER.raiseEventAwaiting('module-singleton-created', {
-                id: id,
+                id: this.id,
                 module: this,
                 viewer: undefined
             }).catch(/*no-op*/));
@@ -1274,6 +1340,9 @@ export function initXOpatLoader(ENV: XOpatCoreConfig, PLUGINS: Record<string, XO
          * @constructor
          */
         static get IID() {
+            const iid = (this as any).$id;
+            if (iid) return iid;
+            console.warn(`IID not set - defaulting to ViewerInstance::${this.name} - this is a bug, registration of component not performed!`);
             return "ViewerInstance::" + this.name;
         }
 
@@ -1289,9 +1358,15 @@ export function initXOpatLoader(ENV: XOpatCoreConfig, PLUGINS: Record<string, XO
             super();
 
             const Self = this.constructor as XOpatViewerSingletonClass;
+            const iid = Self.IID;
+
+            const exportedClass = ((window as any).xmodules || {})[iid];
+            if (!exportedClass) {
+                console.warn(`Viewer Singleton '${iid}' is missing from window.xmodules! Ensure you registered it via registerViewerSingleton('${(Self as any).$className || Self.name}', ClassName).`);
+            }
 
             // throws if exists
-            VIEWER_MANAGER._attachSingleton(Self.IID, this, viewer);
+            VIEWER_MANAGER._attachSingleton(iid, this, viewer);
 
             /**
              * @type {OpenSeadragon.Viewer}
@@ -1313,7 +1388,7 @@ export function initXOpatLoader(ENV: XOpatCoreConfig, PLUGINS: Record<string, XO
              * @event viewer-singleton-created
              */
             setTimeout(() => VIEWER_MANAGER.raiseEventAwaiting('viewer-singleton-created', {
-                id: Self.IID,
+                id: iid,
                 module: this,
                 viewer: viewer
             }).catch(/*no-op*/));
@@ -1528,8 +1603,8 @@ export function initXOpatLoader(ENV: XOpatCoreConfig, PLUGINS: Record<string, XO
      */
     const XOpatPlugin = (window as any).XOpatPlugin = class XOpatPlugin extends XOpatElement implements IXOpatPlugin {
 
-        constructor(id: string) {
-            super(id, "plugin");
+        constructor() {
+            super(undefined, "plugin");
         }
 
         /**
@@ -2488,7 +2563,7 @@ form.submit();
          * Note: activeBackgroundIndex currently cannot represent blank viewer slots, so only
          * viewers with a resolved background are persisted.
          */
-        syncOpenedViewersToSession: function() {
+        syncOpenedViewersToSession: function () {
             const viewers = (VIEWER_MANAGER.viewers || []).filter(Boolean);
             const backgrounds = Array.isArray(APPLICATION_CONTEXT.config.background) ? APPLICATION_CONTEXT.config.background : [];
             const visualizations = Array.isArray(APPLICATION_CONTEXT.config.visualizations) ? APPLICATION_CONTEXT.config.visualizations : [];
@@ -2535,14 +2610,14 @@ form.submit();
                         vizIndex,
                     };
                 })
-                .filter(({ bgIndex, vizIndex }) => bgIndex !== undefined || vizIndex !== undefined);
+                .filter(({ bgIndex, vizIndex }: { bgIndex: number | undefined, vizIndex: number | undefined }) => bgIndex !== undefined || vizIndex !== undefined);
 
             const activeBackgroundIndex = resolved
-                .map(({ bgIndex }) => bgIndex)
-                .filter((value): value is number => Number.isInteger(value));
+                .map(({ bgIndex }: { bgIndex: number | undefined }) => bgIndex)
+                .filter((value: number | undefined) => Number.isInteger(value));
 
             const activeVisualizationIndex = resolved.length > 0
-                ? resolved.map(({ vizIndex }) => vizIndex)
+                ? resolved.map(({ vizIndex }: { vizIndex: number | undefined }) => vizIndex)
                 : undefined;
 
             APPLICATION_CONTEXT.setOption(
@@ -2609,7 +2684,7 @@ form.submit();
             const exportPattern = /^(.*?)-(\d{4}-\d{2}-\d{2})-(all|annotations|presets)(-selection)?$/i;
             const exportMatch = withoutExt.match(exportPattern);
             const stem = exportMatch ? exportMatch[1] : withoutExt;
-            const viewerMatch = stem.match(/^(.*)--viewer-([^/]+)$/);
+            const viewerMatch = stem?.match(/^(.*)--viewer-([^/]+)$/);
 
             return {
                 fileName: cleanName,
@@ -2885,18 +2960,18 @@ form.submit();
             v.addHandler("canvas-press", set);
 
             v.addOnceHandler &&
-            v.addOnceHandler("destroy", () => {
-                if ((v as any).__managerDeleting) return;
+                v.addOnceHandler("destroy", () => {
+                    if ((v as any).__managerDeleting) return;
 
-                const wasActive = this.active === v;
-                this.viewers = this.viewers.filter((x) => x !== v);
+                    const wasActive = this.active === v;
+                    this.viewers = this.viewers.filter((x) => x !== v);
 
-                if (wasActive) {
-                    this._commitActive(this.viewers[0] || null, 'destroy');
-                } else {
-                    this._syncActiveViewState();
-                }
-            });
+                    if (wasActive) {
+                        this._commitActive(this.viewers[0] || null, 'destroy');
+                    } else {
+                        this._syncActiveViewState();
+                    }
+                });
         }
 
         /**
@@ -3081,10 +3156,10 @@ form.submit();
             });
 
             for (let event in this.broadcastEvents) {
-                const eventList = this.broadcastEvents[event];
+                const eventList = this.broadcastEvents[event as keyof ViewerEventMap];
                 for (let handler of eventList!.keys()) {
                     const hData = eventList!.get(handler);
-                    viewer.addHandler(event, handler, hData.userData, hData.priority);
+                    viewer.addHandler(event as keyof ViewerEventMap, handler, hData.userData, hData.priority);
                 }
             }
 

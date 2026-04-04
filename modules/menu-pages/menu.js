@@ -8,7 +8,7 @@ window.AdvancedMenuPages = class extends XOpatModule {
      * @param {function|string} strategy builder strategy, renderUIFromJson or guessUIFromJson
      */
     constructor(moduleId, strategy='renderUIFromJson') {
-        super("menu-pages")
+        super()
         this.__uids = moduleId; // todo consider doing this in some standard way... we need to inherit the identity to e.g. crash together with the owner
         this._count = 0;
         this.strategy = typeof strategy === "string" ? this[strategy] : strategy;
@@ -883,3 +883,5 @@ window.AdvancedMenuPages = class extends XOpatModule {
         return this.renderUIFromJson(wrapped, sanitizer);
     }
 };
+
+addModule("menu-pages", AdvancedMenuPages);

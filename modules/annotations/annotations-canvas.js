@@ -1,4 +1,4 @@
-OSDAnnotations.FabricWrapper = class extends XOpatViewerSingleton {
+OSDAnnotations.FabricWrapper = class OSDAnnotationsFabricWrapper extends XOpatViewerSingleton {
 
     constructor(viewer) {
         super(viewer);

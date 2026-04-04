@@ -175,15 +175,13 @@ const BuildLogic = {
 
             const rawId = packageData.name || itemDirectory;
             const cleanId = rawId.replace('@xopat-npm-module/', '').replace(/[^a-zA-Z0-9_-]/g, '');
-            // Determine Namespace
-            let namespace = "xmodules";
+            // Determine Namespace - for now only npm modules are exported automatically
+            let namespace = false;
             if (rawId.startsWith('@xopat-npm-module/')) namespace = "xnpm";
-            else if (itemDirectory.includes(`${path.sep}plugins${path.sep}`)) namespace = "xplugins";
 
             const entryPoint = path.resolve(itemDirectory, packageData.buildEntry);
-            logger.log(`[build] ${cleanId}: bundling into XOpat.${namespace}.${cleanId}`);
-
-            await spawnAsync("npx", [
+            logger.log(`[build] ${rawId}: bundling entry point ${packageData.buildEntry}`);
+            const buildArgs = [
                 "esbuild",
                 entryPoint,
                 "--bundle",
@@ -191,10 +189,13 @@ const BuildLogic = {
                 `--outfile=${outFile}`,
                 "--sourcemap",
                 "--minify", // Optional, but recommended for production
+            ];
+            if (namespace) buildArgs.push(
                 `--global-name=window.${namespace}['${cleanId}']`,
                 `--banner:js=window.${namespace} = window.${namespace} || {};`,
                 `--footer:js=window.${namespace}['${cleanId}'] = window.${namespace}['${cleanId}'] || globalThis.__temp_bundle_export; delete globalThis.__temp_bundle_export;`
-            ]);
+            );
+            await spawnAsync("npx", buildArgs);
         } else {
             logger.warn(`${logPrefix} No scripts or "buildEntry" entry point found. Skipping JS build.`);
         }

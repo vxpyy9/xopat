@@ -8,7 +8,7 @@ class ChatModule extends XOpatModuleSingleton {
     _layoutAttached?: boolean;
 
     constructor() {
-        super('vercel-ai-chat-sdk');
+        super();
 
         const cfg = this._getChatConfig();
         this._scriptConsent = {};
@@ -616,3 +616,4 @@ When scripting is not available or insufficient, explain the limitation clearly.
 }
 
 export { ChatModule, ChatPanel, ChatService };
+window.addModule('vercel-ai-chat-sdk', ChatModule);

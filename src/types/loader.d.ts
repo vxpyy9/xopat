@@ -170,8 +170,20 @@ interface IXOpatElement extends OpenSeadragon.EventSource {
      */
     integrateWithSingletonModule(
         moduleId: string,
-        callback: (module: IXOpatModuleSingleton | IXOpatViewerSingletonModule) => void,
-        viewer?: ViewerLikeItem
+        callback: (module: IXOpatModuleSingleton) => void,
+    ): boolean;
+
+    /**
+     * Register a callback to run when a singleton module is available for the given viewer.
+     * @param className - The class name of the viewer singleton. Unlike singleton modules, viewer singletons are recognized by unique class name.
+     * @param callback - Called with the module instance once available
+     * @param viewer - Optional viewer scope (defaults to all viewers)
+     * @returns true if synchronously resolved
+     */
+    integrateWithViewerSingletonModule(
+        className: string,
+        viewer: ViewerLikeItem,
+        callback: (module: IXOpatViewerSingletonModule) => void,
     ): boolean;
 
     /** Register a named tab getter for the viewer right-side menu. */

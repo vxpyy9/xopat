@@ -8,7 +8,7 @@ This README shows the recommended interfaces + event patterns using the **annota
 
 ## Core primitives you should use
 
-### 1) Viewer-aware singleton access
+### 1) Global and Viewer-aware singleton access
 
 The reference to the annotations module is not something that has to do with multi-viewports. But we will need it - 
 we can either use the global helper, or better, a callback that gets fired when the module is active:
@@ -24,9 +24,19 @@ const mod = singletonModule("annotations"); // only works if module is available
 ```
 
 - `singletonModule(id)` -> global singleton instance
-- `singletonModule(id, viewer)` -> viewer-context instance (for viewer-singletons, we need the global annotation reference)
 
-> If a module is implemented as a global singleton, `singletonModule("annotations", viewer)` may still resolve to the same instance. In that case you must pass `viewer` explicitly to viewer-bound APIs (see below).
+
+
+```js
+
+this.integrateWithViewerSingletonModule('OSDAnnotationsFabricWrapper', viewerRef, async (module) => {
+    //...
+});
+
+// OR
+const mod = viewerSingletonModule('OSDAnnotationsFabricWrapper', viewerRef); // only works if module is available - make a requirement dependency in include.json if you must
+```
+- `viewerSingletonModule(className, viewer)` -> viewer-context instance (for viewer-singletons, we need the global annotation reference)
 
 ---
 
@@ -48,7 +58,9 @@ Also useful:
 
 ### 3) Viewer-bound APIs in the annotations module
 
-The annotations module should expose a deterministic viewer binding:
+The annotations module for example exposes a deterministic viewer binding. Moreover, it has it's own 'active viewer'
+logic, which is necessary if, for example, user annotates and drags mouse on a different viewport, while we need
+the drag to stay on the origin.
 
 ```js
 const annotations = singletonModule("annotations"); // global module singleton
