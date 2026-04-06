@@ -24,8 +24,10 @@ export class MobileBottomBar {
 
         this.root = this._build();
 
-        const toolbarsContainer = new Div({ id:"toolbars-container", class:"w-full", style:"pointer-events: none; position: absolute; top: 0; left: 0; z-index: 980;" });
-        toolbarsContainer.attachTo(this.context);
+        if (!window.LAYOUT?.getToolbarFloatingContainer?.() && !document.getElementById("toolbars-container")) {
+            const toolbarsContainer = new Div({ id:"toolbars-container", class:"w-full", style:"pointer-events: none; position: absolute; top: 0; left: 0; z-index: 980;" });
+            toolbarsContainer.attachTo(this.context);
+        }
         this.context.appendChild(this.root);
         this.context.style.height = "auto";
 
@@ -370,7 +372,7 @@ export class MobileBottomBar {
     }
 
     _getToolbarsContainer() {
-        return document.getElementById("toolbars-container");
+        return window.LAYOUT?.getToolbarFloatingContainer?.() || document.getElementById("toolbars-container");
     }
 
     _setToolbarsVisible(visible) {
@@ -397,7 +399,7 @@ export class MobileBottomBar {
     }
 
     _hideGlobalMenu() {
-        const toolbars = document.getElementById("toolbars-container");
+        const toolbars = this._getToolbarsContainer();
         if (toolbars) toolbars.style.display = "none";
         this._setToolbarsVisible(!this._isMobileWidth());
         if (window.LAYOUT?.isOpened?.()) {

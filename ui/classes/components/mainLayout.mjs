@@ -5,6 +5,7 @@ import { TabsMenu } from "./tabsMenu.mjs";
 import { RawHtml } from "../elements/rawHtml.mjs";
 import { VisibilityManager } from "../mixins/visibilityManager.mjs";
 import { DockableWindow } from "./dockableWindow.mjs";
+import { Dropdown } from "../elements/dropdown.mjs";
 
 const { div } = van.tags;
 
@@ -68,6 +69,21 @@ export class MainLayout extends BaseComponent {
         this._menu = options.menu || null;
 
         this._shellEl = this._viewerEl = this._dockEl = this._handleEl = null;
+        this._viewerAreaEl = null;
+        this._toolbarFloatingEl = null;
+        this._toolbarEmbeddedAboveEl = null;
+        this._toolbarEmbeddedBelowEl = null;
+        this._toolbarEmbeddedBodyEl = null;
+        this._toolbarEmbeddedHeaderEl = null;
+        this._toolbarEmbeddedDropdownMountEl = null;
+        this._toolbarEmbeddedTitleEl = null;
+        this._toolbarEmbeddedCollapseButton = null;
+        this._toolbarSwitcher = null;
+        this._toolbarRegistry = new Map();
+        this._toolbarActiveId = null;
+        this._toolbarsEmbeddedWide = !!options.toolbarEmbeddingWide;
+        this._toolbarEmbeddingPosition = options.toolbarEmbeddingPosition === "above" ? "above" : "below";
+        this._toolbarsEmbeddedCollapsed = `${APPLICATION_CONTEXT.AppCache.get(`${this.id}-toolbars-embedded-collapsed`, false)}` === "true";
         this._dockViewItemId = `${this.id}-global-menu`;
         this._dockViewTabCategory = "globalMenuTabs";
         this._dockRegisteredInView = false;
@@ -615,6 +631,301 @@ export class MainLayout extends BaseComponent {
         }
 
         this._applyDockVisibility();
+        this.syncToolbarHost();
+    }
+
+    getToolbarFloatingContainer() {
+        return this._toolbarFloatingEl;
+    }
+
+    isToolbarEmbeddingActive() {
+        const narrow = typeof window !== "undefined" && window.innerWidth < this.collapseBreakpointPx;
+        return narrow || this._toolbarsEmbeddedWide;
+    }
+
+    setToolbarEmbedding(enabled, placement = this._toolbarEmbeddingPosition) {
+        this._toolbarsEmbeddedWide = !!enabled;
+        if (placement === "above" || placement === "below") {
+            this._toolbarEmbeddingPosition = placement;
+        }
+        this.syncToolbarHost();
+        return this.isToolbarEmbeddingActive();
+    }
+
+    setToolbarEmbeddingPosition(position) {
+        if (position !== "above" && position !== "below") return false;
+        this._toolbarEmbeddingPosition = position;
+        this.syncToolbarHost();
+        return true;
+    }
+
+    registerToolbar(toolbar) {
+        if (!toolbar?.id) return null;
+        this._toolbarRegistry.set(toolbar.id, toolbar);
+        if (!this._toolbarActiveId) {
+            this._toolbarActiveId = toolbar.id;
+        }
+
+        if (!toolbar.__layoutVisibilityWrapped && toolbar.visibility) {
+            const wrapMethod = (name) => {
+                const original = toolbar.visibility?.[name];
+                if (typeof original !== "function") return;
+                toolbar.visibility[name] = (...args) => {
+                    const result = original.apply(toolbar.visibility, args);
+                    queueMicrotask(() => this.syncToolbarHost());
+                    return result;
+                };
+            };
+            wrapMethod("set");
+            wrapMethod("on");
+            wrapMethod("off");
+            toolbar.__layoutVisibilityWrapped = true;
+        }
+
+        queueMicrotask(() => this.syncToolbarHost());
+        return toolbar;
+    }
+
+    unregisterToolbar(toolbarOrId) {
+        const id = typeof toolbarOrId === "string" ? toolbarOrId : toolbarOrId?.id;
+        if (!id) return false;
+        const toolbar = this._toolbarRegistry.get(id);
+        if (toolbar?.setEmbedded) {
+            toolbar.setEmbedded(false, { container: this._toolbarFloatingEl, active: true });
+        }
+        this._toolbarRegistry.delete(id);
+        if (this._toolbarActiveId === id) {
+            this._toolbarActiveId = null;
+        }
+        this.syncToolbarHost();
+        return true;
+    }
+
+    focusToolbar(id) {
+        if (!id || !this._toolbarRegistry.has(id)) return false;
+        this._toolbarActiveId = id;
+        this.syncToolbarHost();
+        return true;
+    }
+
+    setEmbeddedToolbarCollapsed(next) {
+        this._toolbarsEmbeddedCollapsed = !!next;
+        APPLICATION_CONTEXT.AppCache.set(`${this.id}-toolbars-embedded-collapsed`, this._toolbarsEmbeddedCollapsed ? "true" : "false");
+        this._renderEmbeddedToolbarHeader();
+        this.syncToolbarHost();
+        return this._toolbarsEmbeddedCollapsed;
+    }
+
+    toggleEmbeddedToolbarCollapsed() {
+        return this.setEmbeddedToolbarCollapsed(!this._toolbarsEmbeddedCollapsed);
+    }
+
+    _getToolbarMeta(toolbar) {
+        const meta = toolbar?.getEmbeddedMeta?.() || {};
+        return {
+            id: toolbar?.id,
+            title: meta.title || toolbar?.id || $.t?.("common.toolbar") || "Toolbar",
+            icon: meta.icon || "fa-wrench"
+        };
+    }
+
+    _getVisibleToolbars() {
+        return Array.from(this._toolbarRegistry.values()).filter(toolbar => {
+            if (!toolbar) return false;
+            if (toolbar.visibility?.is && toolbar.visibility.is() === false) return false;
+            return true;
+        });
+    }
+
+    _buildToolbarHostSlot(position) {
+        const slot = document.createElement("div");
+        slot.id = `${this.id}-toolbar-embedded-${position}`;
+        slot.className = "hidden shrink-0 px-2 pb-2";
+
+        const card = document.createElement("div");
+        card.className = "w-full rounded-box border border-base-300 bg-base-200/95 shadow-sm backdrop-blur px-2 py-2 flex flex-col gap-2";
+
+        const header = document.createElement("div");
+        header.className = "flex items-center gap-2";
+
+        const dropdownMount = document.createElement("div");
+        dropdownMount.className = "min-w-0 flex-1";
+
+        const title = document.createElement("div");
+        title.className = "min-w-0 flex-1 truncate text-sm font-medium";
+        title.style.display = "none";
+
+        const collapse = document.createElement("button");
+        collapse.type = "button";
+        collapse.className = "btn btn-sm btn-ghost";
+        collapse.setAttribute("title", $.t?.("common.close") || "Collapse toolbar");
+        collapse.addEventListener("click", (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            this.toggleEmbeddedToolbarCollapsed();
+        });
+
+        header.append(dropdownMount, title, collapse);
+
+        const body = document.createElement("div");
+        body.className = "w-full overflow-x-auto overflow-y-hidden";
+
+        card.append(header, body);
+        slot.append(card);
+
+        slot._toolbarHeader = header;
+        slot._toolbarDropdownMount = dropdownMount;
+        slot._toolbarTitle = title;
+        slot._toolbarCollapseButton = collapse;
+        slot._toolbarBody = body;
+
+        if (position === "above") {
+            this._toolbarEmbeddedAboveEl = slot;
+        } else {
+            this._toolbarEmbeddedBelowEl = slot;
+        }
+
+        this._renderEmbeddedToolbarHeader();
+
+        return slot;
+    }
+
+    _getActiveToolbarHostRefs() {
+        const slot = this._toolbarEmbeddingPosition === "above"
+            ? this._toolbarEmbeddedAboveEl
+            : this._toolbarEmbeddedBelowEl;
+        return {
+            slot,
+            header: slot?._toolbarHeader || null,
+            dropdownMount: slot?._toolbarDropdownMount || null,
+            title: slot?._toolbarTitle || null,
+            collapseButton: slot?._toolbarCollapseButton || null,
+            body: slot?._toolbarBody || null,
+        };
+    }
+
+    _renderEmbeddedToolbarHeader(toolbars = this._getVisibleToolbars()) {
+        const refs = this._getActiveToolbarHostRefs();
+        if (!refs.collapseButton) return;
+        const icon = this._toolbarsEmbeddedCollapsed ? "fa-chevron-down" : "fa-chevron-up";
+        refs.collapseButton.innerHTML = `<i class="fa-solid ${icon}"></i>`;
+        refs.collapseButton.setAttribute(
+            "aria-label",
+            this._toolbarsEmbeddedCollapsed ? "Expand toolbar" : "Collapse toolbar"
+        );
+
+        if (!refs.dropdownMount || !refs.title) return;
+
+        const activeToolbar = toolbars.find(toolbar => toolbar.id === this._toolbarActiveId) || toolbars[0] || null;
+        const meta = activeToolbar ? this._getToolbarMeta(activeToolbar) : null;
+
+        if (toolbars.length <= 1) {
+            refs.dropdownMount.style.display = "none";
+            refs.title.style.display = meta ? "" : "none";
+            refs.title.textContent = meta?.title || "";
+            return;
+        }
+
+        refs.dropdownMount.style.display = "";
+        refs.title.style.display = "none";
+
+        const items = toolbars.map(toolbar => {
+            const t = this._getToolbarMeta(toolbar);
+            return {
+                id: toolbar.id,
+                label: t.title,
+                icon: t.icon,
+                onClick: () => {
+                    this.focusToolbar(toolbar.id);
+                }
+            };
+        });
+
+        const existingSwitcherRoot = this._toolbarSwitcher
+            ? document.getElementById(this._toolbarSwitcher.headerButton?.id)?.parentElement
+            : null;
+        if (existingSwitcherRoot && existingSwitcherRoot.parentNode !== refs.dropdownMount) {
+            refs.dropdownMount.appendChild(existingSwitcherRoot);
+        }
+
+        if (!this._toolbarSwitcher) {
+            this._toolbarSwitcher = new Dropdown({
+                id: `${this.id}-toolbar-switcher`,
+                parentId: this.id,
+                title: meta?.title || "Toolbar",
+                icon: meta?.icon || "fa-wrench",
+                items,
+                activeSelection: this._toolbarActiveId,
+                selectionStyle: "check",
+                closeOnItemClick: true,
+                widthClass: "w-64",
+                placement: "below"
+            });
+            this._toolbarSwitcher.attachTo(refs.dropdownMount);
+        } else {
+            this._toolbarSwitcher.items = {};
+            items.forEach(item => {
+                this._toolbarSwitcher.items[item.id] = item;
+            });
+            this._toolbarSwitcher.activeSelectionId = this._toolbarActiveId;
+            this._toolbarSwitcher.title = meta?.title || "Toolbar";
+            this._toolbarSwitcher.icon = meta?.icon || "fa-wrench";
+            this._toolbarSwitcher._updateHeaderFromItem?.(meta ? { label: meta.title, icon: meta.icon } : null);
+            this._toolbarSwitcher._rebuildContent?.();
+            this._toolbarSwitcher.setSelected?.(this._toolbarActiveId);
+        }
+    }
+
+    syncToolbarHost() {
+        const floatingContainer = this._toolbarFloatingEl;
+        if (!floatingContainer) return;
+
+        const refs = this._getActiveToolbarHostRefs();
+        const embeddedBody = refs.body;
+        const embedded = this.isToolbarEmbeddingActive();
+        const visibleToolbars = this._getVisibleToolbars();
+
+        if (!this._toolbarActiveId || !visibleToolbars.some(toolbar => toolbar.id === this._toolbarActiveId)) {
+            this._toolbarActiveId = visibleToolbars[0]?.id || null;
+        }
+
+        this._renderEmbeddedToolbarHeader(visibleToolbars);
+
+        const activeSlot = this._toolbarEmbeddingPosition === "above"
+            ? this._toolbarEmbeddedAboveEl
+            : this._toolbarEmbeddedBelowEl;
+        const inactiveSlot = this._toolbarEmbeddingPosition === "above"
+            ? this._toolbarEmbeddedBelowEl
+            : this._toolbarEmbeddedAboveEl;
+
+        if (inactiveSlot) inactiveSlot.classList.add("hidden");
+
+        if (!embedded || !visibleToolbars.length) {
+            if (activeSlot) activeSlot.classList.add("hidden");
+            for (const toolbar of this._toolbarRegistry.values()) {
+                toolbar?.setEmbedded?.(false, {
+                    container: floatingContainer,
+                    active: true,
+                });
+            }
+            return;
+        }
+
+        if (activeSlot) {
+            activeSlot.classList.remove("hidden");
+        }
+        if (embeddedBody) {
+            embeddedBody.style.display = this._toolbarsEmbeddedCollapsed ? "none" : "";
+        }
+
+        for (const toolbar of this._toolbarRegistry.values()) {
+            const isVisibleToolbar = visibleToolbars.some(item => item.id === toolbar.id);
+            const isActive = isVisibleToolbar && toolbar.id === this._toolbarActiveId;
+            toolbar?.setEmbedded?.(true, {
+                container: embeddedBody,
+                active: isActive,
+            });
+        }
     }
 
     _ensureViewCategory() {
@@ -761,7 +1072,18 @@ export class MainLayout extends BaseComponent {
     create() {
         // --- viewer core (IDs unchanged) ---
         const osd = div({ id:"osd", style:"position: absolute; top: 0; left: 0; right: 0; bottom: 0; pointer-events:auto;", class:"grow relative w-full overflow-hidden" });
-        const viewerWrap = div({ class:"relative flex-1" }, osd, new RawHtml(null, `<div id="fullscreen-menu" class="bg-base-100"></div>`).create());
+        const floatingToolbars = div({
+            id: "toolbars-container",
+            class: "absolute inset-0 pointer-events-none z-[980]"
+        });
+        const viewerWrap = div({ class:"relative flex-1 min-h-0" },
+            osd,
+            floatingToolbars,
+            new RawHtml(null, `<div id="fullscreen-menu" class="bg-base-100"></div>`).create()
+        );
+        const embeddedAbove = this._buildToolbarHostSlot("above");
+        const embeddedBelow = this._buildToolbarHostSlot("below");
+        const viewerArea = div({ class:"relative flex flex-col flex-1 min-h-0 min-w-0" }, embeddedAbove, viewerWrap, embeddedBelow);
 
         const topSide = new Div({ id: "top-side-wrapper" }, new RawHtml(null, `
             <div id="top-side" class="flex-row w-full glass" style="display: flex; position: relative; align-items: flex-start; height: 35px; pointer-events: none;">
@@ -805,23 +1127,26 @@ origin-center
         });
         const dockNode = this._dockEl;
         const shell = div({ id:this.id, class:"absolute w-full h-full top-0 left-0 flex flex-row" },
-            this.position === "left" ? [dockNode, handle, viewerWrap] : [viewerWrap, handle, dockNode]
+            this.position === "left" ? [dockNode, handle, viewerArea] : [viewerArea, handle, dockNode]
         );
 
         this._shellEl = shell;
-        this._viewerEl = viewerWrap;
+        this._viewerEl = viewerArea;
+        this._viewerAreaEl = viewerArea;
+        this._toolbarFloatingEl = floatingToolbars;
         this._handleEl = handle;
 
         this._syncMenuTabs();
         this._wireResize();
         this._applyResponsiveLayout();
         this._updateDockVisibility();
+        this.syncToolbarHost();
 
         return shell;
     }
 
     onLayoutChange(details) {
-        console.log("Layout change detected in MainLayout:", details);
         this._applyResponsiveLayout();
+        this.syncToolbarHost();
     }
 }

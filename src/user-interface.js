@@ -672,7 +672,10 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
                         body: html,
                     }
                 );
-                menu.attachTo(document.getElementById('toolbars-container'));
+                const toolbarContainer = window.LAYOUT?.getToolbarFloatingContainer?.()
+                    || document.getElementById('toolbars-container');
+                menu.attachTo(toolbarContainer);
+                window.LAYOUT?.registerToolbar?.(menu);
                 menu.onLayoutChange({width: window.innerWidth});
 
                 // if (!APPLICATION_CONTEXT.getOption(`toolBar`, true)){

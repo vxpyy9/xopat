@@ -658,9 +658,9 @@ export class ChatPanel extends BaseComponent {
         toggleAllWrap.appendChild(label({ for: "chat-namespace-consent-grant-all" }, "  ", "Grant all"));
         content.appendChild(toggleAllWrap);
 
-
+        const consentsWrap = div({ class: "max-h-[15rem] overflow-x-auto" });
         allEntries.forEach(([namespace, value]: [string, ScriptConsentEntry]) => {
-            const wrapper = div({ class: "flex flex-row gap-1" });
+            const wrapper = div({ class: "flex flex-row gap-1 mt-2" });
 
             wrapper.appendChild(input({
                 id: "chat-namespace-consent-" + namespace,
@@ -679,8 +679,9 @@ export class ChatPanel extends BaseComponent {
                     for: "chat-namespace-consent-" + namespace,
                 }, value.title, span({ class: "text-[11px] text-base-content/70" }, value.description)));
             }
-            content.appendChild(wrapper);
+            consentsWrap.appendChild(wrapper);
         });
+        content.appendChild(consentsWrap);
     }
 
     _setStatus(text: string | null | undefined): void {

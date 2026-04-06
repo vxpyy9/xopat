@@ -166,7 +166,8 @@ export class XOpatVisualizationScriptApi extends XOpatScriptingApi implements Vi
             activeIndex,
             {
                 historyMode: "visualization-step",
-                historyLabel: options.historyLabel || "restore visualization state"
+                historyLabel: options.historyLabel || "restore visualization state",
+                strictVisualization: true,
             }
         );
     }

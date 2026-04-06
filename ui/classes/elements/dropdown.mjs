@@ -511,18 +511,11 @@ class Dropdown extends BaseSelectableComponent {
         submenuEl.style.visibility = "visible";
 
         if (left + submenuRect.width > viewportWidth - anchorRect.left - margin) {
-            console.log("overflowing right", left, submenuRect.width, viewportWidth - margin);
             left = Math.round(anchorRect.left) - submenuRect.width - 6;
             submenuEl.style.right = `${anchorRect.width}px`;
-
         } else {
-            console.log("not overflowing right", left, submenuRect.width, viewportWidth - margin);
             submenuEl.style.left = `${left}px`;
-
         }
-
-
-
 
         const token = UI.Services.FloatingManager.register({
             el: submenuEl,

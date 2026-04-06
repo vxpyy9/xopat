@@ -175,8 +175,9 @@ class MenuTab extends BaseComponent {
         }
         this.style = "TITLE";
         const nodes = this.headerButton?.children;
-        nodes[0].classList.add("hidden");
-        nodes[1].classList.remove("hidden");
+        if (!nodes?.length) return;
+        nodes[0]?.classList.add("hidden");
+        nodes[1]?.classList.remove("hidden");
     }
 
     titleIcon() {
@@ -185,8 +186,9 @@ class MenuTab extends BaseComponent {
         }
         this.style = "ICONTITLE";
         const nodes = this.headerButton?.children;
-        nodes[0].classList.remove("hidden");
-        nodes[1].classList.remove("hidden");
+        if (!nodes?.length) return;
+        nodes[0]?.classList.remove("hidden");
+        nodes[1]?.classList.remove("hidden");
     }
 
     iconOnly() {
@@ -195,22 +197,75 @@ class MenuTab extends BaseComponent {
         }
         this.style = "ICON";
         const nodes = this.headerButton?.children;
-        nodes[0].classList.remove("hidden");
-        nodes[1].classList.add("hidden");
+        if (!nodes?.length) return;
+        nodes[0]?.classList.remove("hidden");
+        nodes[1]?.classList.add("hidden");
     }
 
-    iconRotate(){
+    syncHeaderLayout({ onSide = false, side = "LEFT", rotated = false, compact = false, collapsedToTop = false } = {}) {
+        const header = document.getElementById(this.headerButton?.id);
+        if (!header) return;
+
+        const [iconNode, titleNode] = header.children;
+        const collapsed = collapsedToTop === true;
+        const alignRight = side === "RIGHT" && onSide && !rotated && !collapsed;
+        const justify = collapsed
+            ? "flex-start"
+            : (rotated ? "center" : (alignRight ? "flex-end" : "flex-start"));
+        const textAlign = alignRight ? "right" : "left";
+
+        header.style.display = "inline-flex";
+        header.style.alignItems = "center";
+        header.style.justifyContent = justify;
+        header.style.textAlign = textAlign;
+        header.style.whiteSpace = (onSide || collapsed) ? "nowrap" : "";
+
+        // important: compact top-strip buttons must NOT keep side full-width behavior
+        header.style.width = collapsed ? "auto" : (onSide && !rotated ? "100%" : "");
+        header.style.maxWidth = collapsed ? "max-content" : "";
+        header.style.minWidth = collapsed ? "fit-content" : "";
+        header.style.flex = collapsed ? "0 0 auto" : "";
+        header.style.alignSelf = collapsed
+            ? "auto"
+            : (onSide && !rotated ? (alignRight ? "flex-end" : "flex-start") : "");
+
+        // smaller padding for side-not-rotated and for collapsed compact top strip
+        header.style.paddingInline = (compact || collapsed) ? "0.625rem" : "";
+        header.style.paddingBlock = (compact || collapsed) ? "0.375rem" : "";
+
+        if (titleNode) {
+            titleNode.style.textAlign = textAlign;
+            titleNode.style.whiteSpace = "nowrap";
+            titleNode.style.flex = collapsed
+                ? "0 0 auto"
+                : (onSide && !rotated ? "1 1 auto" : "");
+            titleNode.style.maxWidth = collapsed
+                ? "none"
+                : (onSide && !rotated ? "100%" : "");
+            titleNode.style.overflow = collapsed ? "visible" : "";
+            titleNode.style.textOverflow = collapsed ? "clip" : "";
+        }
+
+        if (iconNode) {
+            iconNode.style.flexShrink = "0";
+        }
+    }
+
+    iconRotate() {
         const nodes = this.headerButton?.children;
-        nodes[0].classList.remove("rotate-90");
-        nodes[0].classList.remove("-rotate-90");
-        if(!(this.style==="ICON")){
+        if (!nodes?.length) return;
+
+        nodes[0]?.classList.remove("rotate-90");
+        nodes[0]?.classList.remove("-rotate-90");
+
+        if (!(this.style === "ICON")) {
             return;
         }
-        if(this.parent.orientation==="RIGHT"){
-            nodes[0].classList.add("rotate-90");
 
-        } else if(this.parent.orientation==="LEFT"){
-            nodes[0].classList.add("-rotate-90");
+        if (this.parent.orientation === "RIGHT") {
+            nodes[0]?.classList.add("rotate-90");
+        } else if (this.parent.orientation === "LEFT") {
+            nodes[0]?.classList.add("-rotate-90");
         }
     }
 }

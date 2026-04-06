@@ -30,11 +30,11 @@ export class FullscreenMenuPanel extends MainPanel {
             orientation: Menu.ORIENTATION.LEFT,
             buttonSide: Menu.BUTTONSIDE.LEFT,
             rounded: Menu.ROUNDED.ENABLE,
+            bodyScroll: Menu.SCROLL.ENABLE,
             extraClasses: {
                 ...(normalizedOptions.extraClasses || {}),
                 display: "flex",
                 height: "h-full",
-                width: "w-full",
                 gap: "gap-4",
                 overflow: "overflow-hidden",
             }
@@ -187,7 +187,7 @@ export class FullscreenMenuPanel extends MainPanel {
         for (const tab of Object.values(this.tabs)) {
             if (!tab?.headerButton) continue;
             tab.headerButton.set(Button.ORIENTATION.HORIZONTAL);
-            tab.headerButton.setClass("fullscreenMenuButtonWidth", "w-full justify-start");
+            tab.headerButton.setClass("fullscreenMenuButtonWidth", "justify-start");
         }
     }
 

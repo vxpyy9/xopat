@@ -27,6 +27,15 @@ class Menu extends BaseComponent {
      * @param {*} options
      * @param {keyof typeof Menu.ORIENTATION} [options.orientation] - The orientation of the menu
      * @param {keyof typeof Menu.BUTTONSIDE} [options.buttonSide] - The side of the buttons
+     * @param {keyof typeof Menu.SCROLL} [options.bodyScroll] - The body scroll behavior
+     * @param {keyof typeof Menu.DESIGN} [options.design] - The design of the menu
+     * @param {keyof typeof Menu.ROUNDED} [options.rounded] - The rounded corners of the menu
+     * @param {boolean} [options.namespacedTabs] - Whether to namespace tabs
+     * @param {string} [options.defaultNamespace] - The default namespace for tabs
+     * @param {Array<object>} [options.namespaces] - An array of namespaces to be registered
+     * @param {Array<object>} [options.namespaces[].id] - The id of the namespace
+     * @param {string} [options.namespaces[].title] - The title of the namespace
+     * @param {number} [options.namespaces[].order] - The order of the namespace
      * @param  {...any} args - items to be added to the menu in format {id: string, icon: string or faIcon, title: string, body: string}
      */
     constructor(options = undefined, ...args) {
@@ -35,7 +44,11 @@ class Menu extends BaseComponent {
         this.tabs = {};
         this._focused = undefined;
         this._orientation = "TOP";
+        this._buttonSide = "LEFT";
         this._design = "TITLEICON";
+
+        // actual width breakpoint for side -> top compact fallback
+        this._sideHeaderCollapseWidth = Number(options?.sideHeaderCollapseWidth) || 700;
 
         this._namespacedTabs = options?.namespacedTabs === true || Array.isArray(options?.namespaces);
         this.defaultNamespace = options?.defaultNamespace || Menu.NAMESPACE.SYSTEM;
@@ -55,24 +68,41 @@ class Menu extends BaseComponent {
 
         this.classMap["base"] = "flex gap-1 h-full";
         this.classMap["flex"] = "flex-col";
+        this.options["orientation"] = this.options["orientation"] || Menu.ORIENTATION.TOP;
+        this.options["buttonSide"] = this.options["buttonSide"] || Menu.BUTTONSIDE.LEFT;
+        this.options["design"] = this.options["design"] || Menu.DESIGN.TITLEICON;
+        this.options["rounded"] = this.options["rounded"] || Menu.ROUNDED.DISABLE;
+        this.options["bodyScroll"] = this.options["bodyScroll"] || Menu.SCROLL.DISABLE;
 
-        this.options["orientation"] = Menu.ORIENTATION.TOP;
-        this.options["buttonSide"] = Menu.BUTTONSIDE.LEFT;
-        this.options["design"] = Menu.DESIGN.TITLEICON;
-        this.options["rounded"] = Menu.ROUNDED.DISABLE;
-
-        this._applyOptions(options, "orientation", "buttonSide", "design", "rounded");
+        this._applyOptions(options, "orientation", "buttonSide", "design", "rounded", "bodyScroll");
         this._children = [];
+
+        this._resizeHandler = () => this._syncLayout();
+        window.addEventListener("resize", this._resizeHandler);
     }
 
 
     create() {
         this.header.attachTo(this);
         this.body.attachTo(this);
-        return div(
+        const node = div(
             { ...this.commonProperties, ...this.extraProperties },
             ...this.children
         );
+        requestAnimationFrame(() => this._syncLayout());
+        return node;
+    }
+
+    get orientation() {
+        return this._orientation;
+    }
+
+    get buttonSide() {
+        return this._buttonSide;
+    }
+
+    get design() {
+        return this._design;
     }
 
     /**
@@ -238,6 +268,7 @@ class Menu extends BaseComponent {
         }
 
         tab.attachTo(this.header);
+        requestAnimationFrame(() => this._syncLayout());
         return tab;
     }
 
@@ -288,6 +319,7 @@ class Menu extends BaseComponent {
         if (tab.contentDiv) {
             tab.contentDiv.attachTo(this.body);
         }
+        requestAnimationFrame(() => this._syncLayout());
         return tab;
     }
 
@@ -354,6 +386,160 @@ class Menu extends BaseComponent {
         } else {
             this.header.setClass("hidden", "");
         }
+    }
+
+    _isSideOrientation() {
+        return this._orientation === "LEFT" || this._orientation === "RIGHT";
+    }
+
+    _sideButtonsAreRotated() {
+        return this._isSideOrientation() && this._design === "ICONONLY";
+    }
+
+    _getAvailableMenuWidth() {
+        const root = document.getElementById(this.id);
+        if (root) {
+            const rect = root.getBoundingClientRect();
+            if (rect?.width) return rect.width;
+        }
+        return window.innerWidth;
+    }
+
+    _shouldCollapseSideHeader() {
+        if (!this._isSideOrientation() || this._sideButtonsAreRotated()) {
+            return false;
+        }
+
+        const availableWidth = this._getAvailableMenuWidth();
+        const headerDom = this.getHeaderDomNode();
+        const buttons = Array.from(headerDom?.children || []);
+        const widestButton = buttons.reduce((max, button) => {
+            return Math.max(max, button.scrollWidth || button.getBoundingClientRect().width || 0);
+        }, 0);
+
+        // collapse when the actual menu width is narrow,
+        // or when the header would consume too much space
+        return (
+            availableWidth <= this._sideHeaderCollapseWidth ||
+            (widestButton > 0 && (widestButton * Math.min(buttons.length, 3)) > (availableWidth - 48))
+        );
+    }
+
+    _applyHeaderContainerLayout({ collapsedToTop = false } = {}) {
+        const headerDom = this.getHeaderDomNode();
+        if (!headerDom) return;
+
+        headerDom.style.alignItems = "";
+        headerDom.style.justifyContent = "";
+        headerDom.style.overflowX = "";
+        headerDom.style.overflowY = "";
+        headerDom.style.maxWidth = "";
+        headerDom.style.width = "";
+        headerDom.style.flexWrap = "";
+        headerDom.style.gap = "";
+        headerDom.style.padding = "";
+        headerDom.style.minHeight = "";
+        headerDom.style.scrollBehavior = "";
+
+        if (collapsedToTop) {
+            // compact row like the reference screenshot
+            headerDom.style.width = "100%";
+            headerDom.style.maxWidth = "100%";
+            headerDom.style.overflowX = "auto";
+            headerDom.style.overflowY = "hidden";
+            headerDom.style.justifyContent = "flex-start";
+            headerDom.style.alignItems = "center";
+            headerDom.style.flexWrap = "nowrap";
+            headerDom.style.gap = "0.375rem";
+            headerDom.style.padding = "0.25rem 0";
+            headerDom.style.minHeight = "2.75rem";
+            headerDom.style.scrollBehavior = "smooth";
+            return;
+        }
+
+        if (!this._isSideOrientation()) {
+            headerDom.style.justifyContent = this._buttonSide === "RIGHT" ? "flex-end" : "flex-start";
+            return;
+        }
+
+        if (this._sideButtonsAreRotated()) {
+            headerDom.style.alignItems = "center";
+            headerDom.style.justifyContent = "center";
+            return;
+        }
+
+        const alignEnd = this._orientation === "RIGHT";
+        headerDom.style.alignItems = alignEnd ? "flex-end" : "flex-start";
+        headerDom.style.justifyContent = "flex-start";
+    }
+
+    _syncTabButtonLayout({ collapsedToTop = false } = {}) {
+        const onSide = this._isSideOrientation() && !collapsedToTop;
+        const rotated = onSide && this._sideButtonsAreRotated();
+        const side = this._orientation;
+
+        for (const tab of Object.values(this.tabs)) {
+            if (!tab?.headerButton?.set) continue;
+
+            if (collapsedToTop || !this._isSideOrientation()) {
+                tab.headerButton.set(ui.Button.ORIENTATION.HORIZONTAL);
+            } else if (rotated) {
+                const orientation = side === "RIGHT"
+                    ? ui.Button.ORIENTATION.VERTICAL_RIGHT
+                    : ui.Button.ORIENTATION.VERTICAL_LEFT;
+                tab.headerButton.set(orientation);
+            } else {
+                tab.headerButton.set(ui.Button.ORIENTATION.HORIZONTAL);
+            }
+
+            tab.headerButton.iconRotate();
+
+            tab.headerButton.syncHeaderLayout?.({
+                onSide,
+                side,
+                rotated,
+                compact: onSide && !rotated,
+                collapsedToTop,
+            });
+        }
+    }
+
+    _syncLayout() {
+        const root = document.getElementById(this.id);
+        if (!root) return;
+
+        const collapsedToTop = this._shouldCollapseSideHeader();
+
+        if (collapsedToTop) {
+            this.setClass("flex", "flex-col");
+            this.header.set(ui.Join.STYLE.HORIZONTAL);
+        } else if (this._orientation === "TOP") {
+            this.setClass("flex", "flex-col");
+            this.header.set(ui.Join.STYLE.HORIZONTAL);
+        } else if (this._orientation === "BOTTOM") {
+            this.setClass("flex", "flex-col-reverse");
+            this.header.set(ui.Join.STYLE.HORIZONTAL);
+        } else if (this._orientation === "LEFT") {
+            this.setClass("flex", "flex-row");
+            this.header.set(ui.Join.STYLE.VERTICAL);
+        } else if (this._orientation === "RIGHT") {
+            this.setClass("flex", "flex-row-reverse");
+            this.header.set(ui.Join.STYLE.VERTICAL);
+        }
+
+        const bodyDom = this.getBodyDomNode();
+        if (bodyDom) {
+            bodyDom.style.minWidth = "0";
+            bodyDom.style.width = collapsedToTop ? "100%" : "";
+            bodyDom.style.flex = collapsedToTop ? "1 1 auto" : "";
+        }
+
+        this._applyHeaderContainerLayout({ collapsedToTop });
+        this._syncTabButtonLayout({ collapsedToTop });
+    }
+
+    onLayoutChange() {
+        this._syncLayout();
     }
 
     append(title, titleItem, item, id, pluginId, bg=undefined) {
@@ -464,54 +650,66 @@ Menu.DEFAULT_NAMESPACES = [
 
 Menu.ORIENTATION = {
     TOP: function () {
-        this.setClass("flex", "flex-col");
         this._orientation = "TOP";
-        this.header.set(ui.Join.STYLE.HORIZONTAL);
-        for (let t of Object.values(this.tabs)) { t.headerButton?.set(ui.Button.ORIENTATION.HORIZONTAL); t.iconRotate(); }
+        this._syncLayout();
     },
     BOTTOM: function () {
-        this.setClass("flex", "flex-col-reverse");
         this._orientation = "BOTTOM";
-        this.header.set(ui.Join.STYLE.HORIZONTAL);
-        for (let t of Object.values(this.tabs)) { t.headerButton?.set(ui.Button.ORIENTATION.HORIZONTAL); t.iconRotate(); }
+        this._syncLayout();
     },
     LEFT: function () {
-        this.setClass("flex", "flex-row");
         this._orientation = "LEFT";
-        this.header.set(ui.Join.STYLE.VERTICAL);
-        for (let t of Object.values(this.tabs)) { t.headerButton?.set(ui.Button.ORIENTATION.VERTICAL_LEFT); t.iconRotate(); }
+        this._syncLayout();
     },
     RIGHT: function () {
-        this.setClass("flex", "flex-row-reverse");
         this._orientation = "RIGHT";
-        this.header.set(ui.Join.STYLE.VERTICAL);
-        for (let t of Object.values(this.tabs)) { t.headerButton?.set(ui.Button.ORIENTATION.VERTICAL_RIGHT); t.iconRotate(); }
+        this._syncLayout();
     }
 }
 
 Menu.BUTTONSIDE = {
-    LEFT: function () { this.header.setClass("flex", ""); },
-    RIGHT: function () { this.header.setClass("flex", "flex-end"); },
-}
+    LEFT: function () {
+        this._buttonSide = "LEFT";
+        this.header.setClass("flex", "");
+    },
+    RIGHT: function () {
+        this._buttonSide = "RIGHT";
+        this.header.setClass("flex", "flex-end");
+    },
+};
 
 Menu.DESIGN = {
     ICONONLY: function () {
         this._design = "ICONONLY";
-        for (let t of Object.values(this.tabs)) { t.iconOnly(); t.iconRotate(); }
+        for (let t of Object.values(this.tabs)) { t.iconOnly(); }
+        this._syncLayout();
     },
     TITLEONLY: function () {
         this._design = "TITLEONLY";
-        for (let t of Object.values(this.tabs)) { t.titleOnly(); t.iconRotate(); }
+        for (let t of Object.values(this.tabs)) { t.titleOnly(); }
+        this._syncLayout();
     },
     TITLEICON: function () {
         this._design = "TITLEICON";
-        for (let t of Object.values(this.tabs)) { t.titleIcon(); t.iconRotate(); }
+        for (let t of Object.values(this.tabs)) { t.titleIcon(); }
+        this._syncLayout();
     }
-}
+};
 
 Menu.ROUNDED = {
     ENABLE: function () { ui.Join.ROUNDED.ENABLE.call(this.header); },
     DISABLE: function () { ui.Join.ROUNDED.DISABLE.call(this.header); },
+};
+
+Menu.SCROLL = {
+    ENABLE: function () {
+        this.body.setClass("overflow-x-auto", "");
+        this.body.setClass("overflow-y-auto", "overflow-y-auto");
+    },
+    DISABLE: function () {
+        this.body.setClass("overflow-x-auto", "");
+        this.body.setClass("overflow-y-auto", "");
+    },
 };
 
 export { Menu };

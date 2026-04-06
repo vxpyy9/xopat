@@ -512,9 +512,9 @@ export class SlideSwitcherMenu extends UI.BaseComponent {
         const isOpen = !!viewer;
         const linked = this._isLinked(viewer);
 
-        const wrapClass = "relative overflow-hidden aspect-[4/3] w-full rounded border border-base-300 bg-base-100";
+        const wrapClass = "relative overflow-hidden w-full rounded border border-base-300 bg-base-100";
         const hostClass = "flex items-center justify-center h-[120px]";
-        const thumbClass = "block w-[88%] h-[88%] object-contain select-none pointer-events-none";
+        const thumbClass = "block object-contain select-none pointer-events-none";
         const labelClass = "hidden";
 
         const previewImage = img({
