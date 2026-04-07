@@ -3,9 +3,9 @@ import { BaseComponent } from "../baseComponent.mjs";
 import { Div } from "../elements/div.mjs";
 import { TabsMenu } from "./tabsMenu.mjs";
 import { RawHtml } from "../elements/rawHtml.mjs";
+import { Dropdown } from "../elements/dropdown.mjs";
 import { VisibilityManager } from "../mixins/visibilityManager.mjs";
 import { DockableWindow } from "./dockableWindow.mjs";
-import { Dropdown } from "../elements/dropdown.mjs";
 
 const { div } = van.tags;
 
@@ -69,21 +69,6 @@ export class MainLayout extends BaseComponent {
         this._menu = options.menu || null;
 
         this._shellEl = this._viewerEl = this._dockEl = this._handleEl = null;
-        this._viewerAreaEl = null;
-        this._toolbarFloatingEl = null;
-        this._toolbarEmbeddedAboveEl = null;
-        this._toolbarEmbeddedBelowEl = null;
-        this._toolbarEmbeddedBodyEl = null;
-        this._toolbarEmbeddedHeaderEl = null;
-        this._toolbarEmbeddedDropdownMountEl = null;
-        this._toolbarEmbeddedTitleEl = null;
-        this._toolbarEmbeddedCollapseButton = null;
-        this._toolbarSwitcher = null;
-        this._toolbarRegistry = new Map();
-        this._toolbarActiveId = null;
-        this._toolbarsEmbeddedWide = !!options.toolbarEmbeddingWide;
-        this._toolbarEmbeddingPosition = options.toolbarEmbeddingPosition === "above" ? "above" : "below";
-        this._toolbarsEmbeddedCollapsed = `${APPLICATION_CONTEXT.AppCache.get(`${this.id}-toolbars-embedded-collapsed`, false)}` === "true";
         this._dockViewItemId = `${this.id}-global-menu`;
         this._dockViewTabCategory = "globalMenuTabs";
         this._dockRegisteredInView = false;
@@ -92,6 +77,22 @@ export class MainLayout extends BaseComponent {
         this._wrapperRegistry = new Map();
         this._dockedWrappers = new Map();
         this._pendingDockableRegistrations = new Set();
+
+        this._toolbarEmbedWideEnabled = !!options.toolbarEmbeddingEnabled;
+        this._toolbarEmbeddingPosition = options.toolbarEmbeddingPosition === "above" ? "above" : "below";
+        this._toolbarEmbeddedCollapsed = APPLICATION_CONTEXT.AppCache.get(`${this.id}-toolbar-embedded-collapsed`, false) === true;
+        this._toolbars = new Map();
+        this._activeToolbarId = APPLICATION_CONTEXT.AppCache.get(`${this.id}-active-toolbar`, null) || null;
+        this._toolbarAboveEl = null;
+        this._toolbarBelowEl = null;
+        this._toolbarFloatingEl = null;
+        this._toolbarHiddenEl = null;
+        this._toolbarHostBarEl = null;
+        this._toolbarContentEl = null;
+        this._toolbarPeekEl = null;
+        this._toolbarDropdown = null;
+        this._toolbarSwitcherWrap = null;
+        this._toolbarCollapseBtn = null;
 
         this._syncingDockRequestedState = false;
         this.visibilityManager = new VisibilityManager(this._dockViewItemId).init(
@@ -123,6 +124,8 @@ export class MainLayout extends BaseComponent {
                 this._dockedWrappers.set(normalized.id, normalized.wrapper);
             }
         }
+
+        this._viewerMobileSyncBound = () => this.syncActiveViewerMobile();
     }
 
     /** ---- dynamic tab API ---- */
@@ -355,6 +358,33 @@ export class MainLayout extends BaseComponent {
         this._closeFullscreen();
     }
 
+    openGlobalMenuMobile() {
+        const narrow = typeof window !== "undefined" && window.innerWidth < this.collapseBreakpointPx;
+
+        if (!narrow) {
+            return this.showGlobalMenu();
+        }
+
+        const shown = this.showGlobalMenu();
+        if (!shown) return false;
+
+        if (!this._isFullscreen) {
+            this._openFullscreen();
+        }
+        return true;
+    }
+
+    closeGlobalMenuMobile() {
+        const narrow = typeof window !== "undefined" && window.innerWidth < this.collapseBreakpointPx;
+
+        if (narrow && this._isFullscreen) {
+            this._closeFullscreen();
+        }
+
+        this.hideGlobalMenu();
+        return true;
+    }
+
     _openFullscreen() {
         if (!this._dockEl || !this._viewerEl || this._isFullscreen || !this._isDockEffectivelyVisible()) return;
         this._isFullscreen = true;
@@ -396,6 +426,7 @@ export class MainLayout extends BaseComponent {
             this._topSideElement.style.zIndex = '10001';
         }
         try { document.documentElement.style.overflow = "hidden"; } catch (e) {}
+        this._syncToolbars();
     }
 
     _closeFullscreen() {
@@ -426,6 +457,7 @@ export class MainLayout extends BaseComponent {
         // ensure layout classes and visibility are correct after restoring
         this._applyResponsiveLayout();
         this._updateDockVisibility();
+        this._syncToolbars();
     }
 
     _setDockRequestedOpen(next) {
@@ -631,301 +663,389 @@ export class MainLayout extends BaseComponent {
         }
 
         this._applyDockVisibility();
-        this.syncToolbarHost();
     }
 
-    getToolbarFloatingContainer() {
-        return this._toolbarFloatingEl;
-    }
+    registerToolbar(toolbar) {
+        if (!toolbar?.id) return null;
 
-    isToolbarEmbeddingActive() {
-        const narrow = typeof window !== "undefined" && window.innerWidth < this.collapseBreakpointPx;
-        return narrow || this._toolbarsEmbeddedWide;
-    }
+        this._toolbars.set(toolbar.id, toolbar);
 
-    setToolbarEmbedding(enabled, placement = this._toolbarEmbeddingPosition) {
-        this._toolbarsEmbeddedWide = !!enabled;
-        if (placement === "above" || placement === "below") {
-            this._toolbarEmbeddingPosition = placement;
+        if (!toolbar.__mainLayoutVisibilityHooked && typeof toolbar.visibility?.set === "function") {
+            const originalSet = toolbar.visibility.set.bind(toolbar.visibility);
+            toolbar.visibility.set = (...args) => {
+                const result = originalSet(...args);
+                queueMicrotask(() => this._syncToolbars());
+                return result;
+            };
+            toolbar.__mainLayoutVisibilityHooked = true;
         }
-        this.syncToolbarHost();
-        return this.isToolbarEmbeddingActive();
+
+        if (!this._activeToolbarId) {
+            this._activeToolbarId = toolbar.id;
+        }
+
+        this._syncToolbars();
+        return toolbar;
+    }
+
+    unregisterToolbar(toolbarId) {
+        if (!toolbarId) return false;
+        this._toolbars.delete(toolbarId);
+        if (this._activeToolbarId === toolbarId) {
+            this._activeToolbarId = null;
+        }
+        this._syncToolbars();
+        return true;
+    }
+
+    setToolbarEmbedding(enabled, position = undefined) {
+        this._toolbarEmbedWideEnabled = !!enabled;
+        if (position === "above" || position === "below") {
+            this._toolbarEmbeddingPosition = position;
+        }
+        this._syncToolbars();
+        return this._isToolbarEmbedActive();
     }
 
     setToolbarEmbeddingPosition(position) {
         if (position !== "above" && position !== "below") return false;
         this._toolbarEmbeddingPosition = position;
-        this.syncToolbarHost();
+        this._syncToolbars();
         return true;
     }
 
-    registerToolbar(toolbar) {
-        if (!toolbar?.id) return null;
-        this._toolbarRegistry.set(toolbar.id, toolbar);
-        if (!this._toolbarActiveId) {
-            this._toolbarActiveId = toolbar.id;
+    toggleEmbeddedToolbarCollapsed(force = undefined) {
+        this._toolbarEmbeddedCollapsed = typeof force === "boolean"
+            ? force
+            : !this._toolbarEmbeddedCollapsed;
+
+        if (!this._toolbarEmbeddedCollapsed) {
+            this._ensureActiveToolbarVisible();
         }
 
-        if (!toolbar.__layoutVisibilityWrapped && toolbar.visibility) {
-            const wrapMethod = (name) => {
-                const original = toolbar.visibility?.[name];
-                if (typeof original !== "function") return;
-                toolbar.visibility[name] = (...args) => {
-                    const result = original.apply(toolbar.visibility, args);
-                    queueMicrotask(() => this.syncToolbarHost());
-                    return result;
-                };
-            };
-            wrapMethod("set");
-            wrapMethod("on");
-            wrapMethod("off");
-            toolbar.__layoutVisibilityWrapped = true;
-        }
-
-        queueMicrotask(() => this.syncToolbarHost());
-        return toolbar;
-    }
-
-    unregisterToolbar(toolbarOrId) {
-        const id = typeof toolbarOrId === "string" ? toolbarOrId : toolbarOrId?.id;
-        if (!id) return false;
-        const toolbar = this._toolbarRegistry.get(id);
-        if (toolbar?.setEmbedded) {
-            toolbar.setEmbedded(false, { container: this._toolbarFloatingEl, active: true });
-        }
-        this._toolbarRegistry.delete(id);
-        if (this._toolbarActiveId === id) {
-            this._toolbarActiveId = null;
-        }
-        this.syncToolbarHost();
-        return true;
-    }
-
-    focusToolbar(id) {
-        if (!id || !this._toolbarRegistry.has(id)) return false;
-        this._toolbarActiveId = id;
-        this.syncToolbarHost();
-        return true;
-    }
-
-    setEmbeddedToolbarCollapsed(next) {
-        this._toolbarsEmbeddedCollapsed = !!next;
-        APPLICATION_CONTEXT.AppCache.set(`${this.id}-toolbars-embedded-collapsed`, this._toolbarsEmbeddedCollapsed ? "true" : "false");
-        this._renderEmbeddedToolbarHeader();
-        this.syncToolbarHost();
-        return this._toolbarsEmbeddedCollapsed;
-    }
-
-    toggleEmbeddedToolbarCollapsed() {
-        return this.setEmbeddedToolbarCollapsed(!this._toolbarsEmbeddedCollapsed);
-    }
-
-    _getToolbarMeta(toolbar) {
-        const meta = toolbar?.getEmbeddedMeta?.() || {};
-        return {
-            id: toolbar?.id,
-            title: meta.title || toolbar?.id || $.t?.("common.toolbar") || "Toolbar",
-            icon: meta.icon || "fa-wrench"
-        };
-    }
-
-    _getVisibleToolbars() {
-        return Array.from(this._toolbarRegistry.values()).filter(toolbar => {
-            if (!toolbar) return false;
-            if (toolbar.visibility?.is && toolbar.visibility.is() === false) return false;
-            return true;
-        });
-    }
-
-    _buildToolbarHostSlot(position) {
-        const slot = document.createElement("div");
-        slot.id = `${this.id}-toolbar-embedded-${position}`;
-        slot.className = "hidden shrink-0 px-2 pb-2";
-
-        const card = document.createElement("div");
-        card.className = "w-full rounded-box border border-base-300 bg-base-200/95 shadow-sm backdrop-blur px-2 py-2 flex flex-col gap-2";
-
-        const header = document.createElement("div");
-        header.className = "flex items-center gap-2";
-
-        const dropdownMount = document.createElement("div");
-        dropdownMount.className = "min-w-0 flex-1";
-
-        const title = document.createElement("div");
-        title.className = "min-w-0 flex-1 truncate text-sm font-medium";
-        title.style.display = "none";
-
-        const collapse = document.createElement("button");
-        collapse.type = "button";
-        collapse.className = "btn btn-sm btn-ghost";
-        collapse.setAttribute("title", $.t?.("common.close") || "Collapse toolbar");
-        collapse.addEventListener("click", (e) => {
-            e.preventDefault();
-            e.stopPropagation();
-            this.toggleEmbeddedToolbarCollapsed();
-        });
-
-        header.append(dropdownMount, title, collapse);
-
-        const body = document.createElement("div");
-        body.className = "w-full overflow-x-auto overflow-y-hidden";
-
-        card.append(header, body);
-        slot.append(card);
-
-        slot._toolbarHeader = header;
-        slot._toolbarDropdownMount = dropdownMount;
-        slot._toolbarTitle = title;
-        slot._toolbarCollapseButton = collapse;
-        slot._toolbarBody = body;
-
-        if (position === "above") {
-            this._toolbarEmbeddedAboveEl = slot;
-        } else {
-            this._toolbarEmbeddedBelowEl = slot;
-        }
-
-        this._renderEmbeddedToolbarHeader();
-
-        return slot;
-    }
-
-    _getActiveToolbarHostRefs() {
-        const slot = this._toolbarEmbeddingPosition === "above"
-            ? this._toolbarEmbeddedAboveEl
-            : this._toolbarEmbeddedBelowEl;
-        return {
-            slot,
-            header: slot?._toolbarHeader || null,
-            dropdownMount: slot?._toolbarDropdownMount || null,
-            title: slot?._toolbarTitle || null,
-            collapseButton: slot?._toolbarCollapseButton || null,
-            body: slot?._toolbarBody || null,
-        };
-    }
-
-    _renderEmbeddedToolbarHeader(toolbars = this._getVisibleToolbars()) {
-        const refs = this._getActiveToolbarHostRefs();
-        if (!refs.collapseButton) return;
-        const icon = this._toolbarsEmbeddedCollapsed ? "fa-chevron-down" : "fa-chevron-up";
-        refs.collapseButton.innerHTML = `<i class="fa-solid ${icon}"></i>`;
-        refs.collapseButton.setAttribute(
-            "aria-label",
-            this._toolbarsEmbeddedCollapsed ? "Expand toolbar" : "Collapse toolbar"
+        APPLICATION_CONTEXT.AppCache.set(
+            `${this.id}-toolbar-embedded-collapsed`,
+            this._toolbarEmbeddedCollapsed ? "true" : "false"
         );
+        this._syncToolbars();
+        return this._toolbarEmbeddedCollapsed;
+    }
 
-        if (!refs.dropdownMount || !refs.title) return;
+    openEmbeddedToolbar() {
+        if (!this._toolbars.size) return false;
+        this._ensureActiveToolbarVisible();
+        this._toolbarEmbeddedCollapsed = false;
+        APPLICATION_CONTEXT.AppCache.set(`${this.id}-toolbar-embedded-collapsed`, "false");
+        this._syncToolbars();
+        return true;
+    }
 
-        const activeToolbar = toolbars.find(toolbar => toolbar.id === this._toolbarActiveId) || toolbars[0] || null;
-        const meta = activeToolbar ? this._getToolbarMeta(activeToolbar) : null;
+    closeEmbeddedToolbar() {
+        if (!this._toolbars.size) return false;
+        this._toolbarEmbeddedCollapsed = true;
+        APPLICATION_CONTEXT.AppCache.set(`${this.id}-toolbar-embedded-collapsed`, "true");
+        this._syncToolbars();
+        return true;
+    }
 
-        if (toolbars.length <= 1) {
-            refs.dropdownMount.style.display = "none";
-            refs.title.style.display = meta ? "" : "none";
-            refs.title.textContent = meta?.title || "";
+    _isToolbarEmbedActive(width = window.innerWidth) {
+        return width < this.collapseBreakpointPx || this._toolbarEmbedWideEnabled;
+    }
+
+    _getRegisteredToolbars() {
+        return Array.from(this._toolbars.values());
+    }
+
+    _getRequestedVisibleToolbars() {
+        return this._getRegisteredToolbars().filter(toolbar => toolbar?.isRequestedVisible?.() ?? true);
+    }
+
+    _ensureActiveToolbarId(toolbars = undefined) {
+        const list = Array.isArray(toolbars) ? toolbars : this._getRegisteredToolbars();
+        const active = list.find(toolbar => toolbar.id === this._activeToolbarId);
+        if (active) return active.id;
+
+        this._activeToolbarId = list[0]?.id || null;
+        if (this._activeToolbarId) {
+            APPLICATION_CONTEXT.AppCache.set(`${this.id}-active-toolbar`, this._activeToolbarId);
+        }
+        return this._activeToolbarId;
+    }
+
+    _ensureActiveToolbarVisible() {
+        const activeId = this._ensureActiveToolbarId(this._getRegisteredToolbars());
+        if (!activeId) return false;
+
+        const toolbar = this._toolbars.get(activeId);
+        if (!toolbar) return false;
+
+        if (!(toolbar.isRequestedVisible?.() ?? true)) {
+            toolbar.visibility?.on?.();
+        }
+        return true;
+    }
+
+    _setActiveToolbar(id, ensureVisible = false) {
+        if (!id || !this._toolbars.has(id)) return false;
+
+        this._activeToolbarId = id;
+        APPLICATION_CONTEXT.AppCache.set(`${this.id}-active-toolbar`, id);
+
+        if (ensureVisible) {
+            this._toolbars.get(id)?.visibility?.on?.();
+        }
+
+        this._syncToolbars();
+        return true;
+    }
+
+    _rebuildToolbarSwitcher(toolbars) {
+        if (!this._toolbarDropdown || !this._toolbarSwitcherWrap) return;
+
+        this._toolbarDropdown.clear();
+        toolbars.forEach(toolbar => {
+            const meta = toolbar.getEmbeddedMeta?.() || {
+                id: toolbar.id,
+                title: toolbar.id,
+                icon: "fa-wrench"
+            };
+
+            this._toolbarDropdown.addItem({
+                id: meta.id,
+                icon: meta.icon,
+                label: meta.title,
+                onClick: () => {
+                    this._setActiveToolbar(meta.id, true);
+                }
+            });
+        });
+
+        this._toolbarDropdown.setSelected?.(this._ensureActiveToolbarId(toolbars));
+    }
+
+    _mountToolbarHost(showHost = true) {
+        if (!this._toolbarHostBarEl || !this._toolbarAboveEl || !this._toolbarBelowEl) return;
+
+        const target = this._toolbarEmbeddingPosition === "above" ? this._toolbarAboveEl : this._toolbarBelowEl;
+        if (this._toolbarHostBarEl.parentNode !== target) {
+            target.appendChild(this._toolbarHostBarEl);
+        }
+
+        this._toolbarAboveEl.style.display = showHost && this._toolbarEmbeddingPosition === "above" ? "" : "none";
+        this._toolbarBelowEl.style.display = showHost && this._toolbarEmbeddingPosition === "below" ? "" : "none";
+    }
+
+    _positionPeekButton() {
+        if (!this._toolbarPeekEl) return;
+        this._toolbarPeekEl.style.top = "";
+        this._toolbarPeekEl.style.bottom = "";
+
+        if (this._toolbarEmbeddingPosition === "above") {
+            const topOffset = (document.getElementById("top-container")?.offsetHeight || 35) + 8;
+            this._toolbarPeekEl.style.top = `${topOffset}px`;
             return;
         }
 
-        refs.dropdownMount.style.display = "";
-        refs.title.style.display = "none";
-
-        const items = toolbars.map(toolbar => {
-            const t = this._getToolbarMeta(toolbar);
-            return {
-                id: toolbar.id,
-                label: t.title,
-                icon: t.icon,
-                onClick: () => {
-                    this.focusToolbar(toolbar.id);
-                }
-            };
-        });
-
-        const existingSwitcherRoot = this._toolbarSwitcher
-            ? document.getElementById(this._toolbarSwitcher.headerButton?.id)?.parentElement
-            : null;
-        if (existingSwitcherRoot && existingSwitcherRoot.parentNode !== refs.dropdownMount) {
-            refs.dropdownMount.appendChild(existingSwitcherRoot);
-        }
-
-        if (!this._toolbarSwitcher) {
-            this._toolbarSwitcher = new Dropdown({
-                id: `${this.id}-toolbar-switcher`,
-                parentId: this.id,
-                title: meta?.title || "Toolbar",
-                icon: meta?.icon || "fa-wrench",
-                items,
-                activeSelection: this._toolbarActiveId,
-                selectionStyle: "check",
-                closeOnItemClick: true,
-                widthClass: "w-64",
-                placement: "below"
-            });
-            this._toolbarSwitcher.attachTo(refs.dropdownMount);
-        } else {
-            this._toolbarSwitcher.items = {};
-            items.forEach(item => {
-                this._toolbarSwitcher.items[item.id] = item;
-            });
-            this._toolbarSwitcher.activeSelectionId = this._toolbarActiveId;
-            this._toolbarSwitcher.title = meta?.title || "Toolbar";
-            this._toolbarSwitcher.icon = meta?.icon || "fa-wrench";
-            this._toolbarSwitcher._updateHeaderFromItem?.(meta ? { label: meta.title, icon: meta.icon } : null);
-            this._toolbarSwitcher._rebuildContent?.();
-            this._toolbarSwitcher.setSelected?.(this._toolbarActiveId);
-        }
+        const bottomBarHeight = document.getElementById("bottom-container")?.offsetHeight || 0;
+        this._toolbarPeekEl.style.bottom = `${bottomBarHeight + 8}px`;
     }
 
-    syncToolbarHost() {
-        const floatingContainer = this._toolbarFloatingEl;
-        if (!floatingContainer) return;
+    _syncToolbars() {
+        if (!this._toolbarFloatingEl || !this._toolbarHiddenEl || !this._toolbarContentEl) return;
 
-        const refs = this._getActiveToolbarHostRefs();
-        const embeddedBody = refs.body;
-        const embedded = this.isToolbarEmbeddingActive();
-        const visibleToolbars = this._getVisibleToolbars();
+        const allToolbars = this._getRegisteredToolbars();
+        let requestedVisibleToolbars = this._getRequestedVisibleToolbars();
+        const embed = this._isToolbarEmbedActive();
+        let activeId = this._ensureActiveToolbarId(allToolbars);
 
-        if (!this._toolbarActiveId || !visibleToolbars.some(toolbar => toolbar.id === this._toolbarActiveId)) {
-            this._toolbarActiveId = visibleToolbars[0]?.id || null;
-        }
+        const suppressForMobileGlobalWindow = this._shouldHideToolbarsForMobileGlobalWindow();
 
-        this._renderEmbeddedToolbarHeader(visibleToolbars);
+        if (suppressForMobileGlobalWindow) {
+            this._toolbarFloatingEl.style.display = "none";
+            this._toolbarAboveEl.style.display = "none";
+            this._toolbarBelowEl.style.display = "none";
+            this._toolbarHostBarEl.style.display = "none";
+            this._toolbarPeekEl.style.display = "none";
 
-        const activeSlot = this._toolbarEmbeddingPosition === "above"
-            ? this._toolbarEmbeddedAboveEl
-            : this._toolbarEmbeddedBelowEl;
-        const inactiveSlot = this._toolbarEmbeddingPosition === "above"
-            ? this._toolbarEmbeddedBelowEl
-            : this._toolbarEmbeddedAboveEl;
+            for (const toolbar of allToolbars) {
+                toolbar.setEmbeddedMode?.(embed);
+                toolbar.setManagedVisible?.(false);
+                toolbar.onLayoutChange?.({ width: window.innerWidth });
 
-        if (inactiveSlot) inactiveSlot.classList.add("hidden");
-
-        if (!embedded || !visibleToolbars.length) {
-            if (activeSlot) activeSlot.classList.add("hidden");
-            for (const toolbar of this._toolbarRegistry.values()) {
-                toolbar?.setEmbedded?.(false, {
-                    container: floatingContainer,
-                    active: true,
-                });
+                const root = toolbar.getRootNode?.();
+                if (root && root.parentNode !== this._toolbarHiddenEl) {
+                    this._toolbarHiddenEl.appendChild(root);
+                }
             }
             return;
         }
 
-        if (activeSlot) {
-            activeSlot.classList.remove("hidden");
-        }
-        if (embeddedBody) {
-            embeddedBody.style.display = this._toolbarsEmbeddedCollapsed ? "none" : "";
+        // Prefer a currently visible toolbar when possible.
+        if (requestedVisibleToolbars.length && !requestedVisibleToolbars.some(toolbar => toolbar.id === activeId)) {
+            activeId = requestedVisibleToolbars[0].id;
+            this._activeToolbarId = activeId;
+            APPLICATION_CONTEXT.AppCache.set(`${this.id}-active-toolbar`, activeId);
         }
 
-        for (const toolbar of this._toolbarRegistry.values()) {
-            const isVisibleToolbar = visibleToolbars.some(item => item.id === toolbar.id);
-            const isActive = isVisibleToolbar && toolbar.id === this._toolbarActiveId;
-            toolbar?.setEmbedded?.(true, {
-                container: embeddedBody,
-                active: isActive,
-            });
+        this._rebuildToolbarSwitcher(allToolbars);
+        this._positionPeekButton();
+
+        if (!allToolbars.length) {
+            this._toolbarFloatingEl.style.display = "none";
+            this._toolbarAboveEl.style.display = "none";
+            this._toolbarBelowEl.style.display = "none";
+            this._toolbarHostBarEl.style.display = "none";
+            this._toolbarPeekEl.style.display = "none";
+
+            for (const toolbar of this._toolbars.values()) {
+                toolbar.setEmbeddedMode?.(false);
+                toolbar.setManagedVisible?.(false);
+                const root = toolbar.getRootNode?.();
+                if (root && root.parentNode !== this._toolbarHiddenEl) {
+                    this._toolbarHiddenEl.appendChild(root);
+                }
+            }
+            return;
         }
+
+        const activeToolbarIsVisible = !!activeId && requestedVisibleToolbars.some(toolbar => toolbar.id === activeId);
+        const showHost = embed && !this._toolbarEmbeddedCollapsed && activeToolbarIsVisible;
+        const showPeek = embed && !showHost;
+
+        if (embed) {
+            this._mountToolbarHost(showHost);
+            this._toolbarFloatingEl.style.display = "none";
+            this._toolbarHostBarEl.style.display = showHost ? "inline-flex" : "none";
+            this._toolbarPeekEl.style.display = showPeek ? "" : "none";
+
+            if (this._toolbarCollapseBtn) {
+                this._toolbarCollapseBtn.title = "Collapse toolbar";
+            }
+
+            for (const toolbar of allToolbars) {
+                const requestedVisible = requestedVisibleToolbars.some(item => item.id === toolbar.id);
+                const isActive = toolbar.id === activeId;
+                const shouldShowInHost = isActive && requestedVisible && !this._toolbarEmbeddedCollapsed;
+
+                toolbar.setEmbeddedMode?.(true);
+                toolbar.setManagedVisible?.(shouldShowInHost);
+                toolbar.onLayoutChange?.({ width: window.innerWidth });
+
+                const root = toolbar.getRootNode?.();
+                if (!root) continue;
+
+                const target = shouldShowInHost ? this._toolbarContentEl : this._toolbarHiddenEl;
+                if (root.parentNode !== target) {
+                    target.appendChild(root);
+                }
+            }
+            return;
+        }
+
+        this._toolbarAboveEl.style.display = "none";
+        this._toolbarBelowEl.style.display = "none";
+        this._toolbarHostBarEl.style.display = "none";
+        this._toolbarPeekEl.style.display = "none";
+        this._toolbarFloatingEl.style.display = "";
+
+        for (const toolbar of allToolbars) {
+            const requestedVisible = toolbar.isRequestedVisible?.() ?? true;
+
+            toolbar.setEmbeddedMode?.(false);
+            toolbar.setManagedVisible?.(requestedVisible);
+            toolbar.onLayoutChange?.({ width: window.innerWidth });
+
+            const root = toolbar.getRootNode?.();
+            if (root && root.parentNode !== this._toolbarFloatingEl) {
+                this._toolbarFloatingEl.appendChild(root);
+            }
+        }
+    }
+
+    _buildToolbarHost() {
+        if (this._toolbarAboveEl) return;
+
+        this._toolbarAboveEl = document.createElement("div");
+        this._toolbarAboveEl.id = `${this.id}-toolbar-host-above`;
+        this._toolbarAboveEl.className = "shrink-0 px-1 pt-1";
+
+        this._toolbarBelowEl = document.createElement("div");
+        this._toolbarBelowEl.id = `${this.id}-toolbar-host-below`;
+        this._toolbarBelowEl.className = "shrink-0 px-1 pb-1";
+
+        this._toolbarFloatingEl = document.createElement("div");
+        this._toolbarFloatingEl.id = "toolbars-container";
+        this._toolbarFloatingEl.className = "absolute inset-0 pointer-events-none";
+        this._toolbarFloatingEl.style.zIndex = "980";
+
+        this._toolbarHiddenEl = document.createElement("div");
+        this._toolbarHiddenEl.id = `${this.id}-toolbar-hidden`;
+        //this._toolbarHiddenEl.className = "hidden";
+
+        this._toolbarDropdown = new Dropdown({
+            id: `${this.id}-toolbar-switcher`,
+            parentId: this.id,
+            title: "Toolbars",
+            icon: "fa-toolbox",
+            items: []
+        });
+        this._toolbarDropdown.iconOnly();
+
+        this._toolbarHostBarEl = document.createElement("div");
+        this._toolbarHostBarEl.id = `${this.id}-toolbar-host-bar`;
+        this._toolbarHostBarEl.className = "items-center gap-1 glass border border-base-300 rounded-md shadow-sm px-1 py-1 pointer-events-auto max-w-full w-full justify-between";
+
+        this._toolbarSwitcherWrap = document.createElement("div");
+        this._toolbarSwitcherWrap.appendChild(this._toolbarDropdown.create());
+
+        this._toolbarContentEl = document.createElement("div");
+        this._toolbarContentEl.id = `${this.id}-toolbar-content`;
+        this._toolbarContentEl.className = "min-w-0 max-w-full";
+        this._toolbarContentEl.style.display = "flex";
+        this._toolbarContentEl.style.alignItems = "center";
+
+        this._toolbarCollapseBtn = document.createElement("button");
+        this._toolbarCollapseBtn.type = "button";
+        this._toolbarCollapseBtn.className = "btn btn-ghost btn-xs";
+        this._toolbarCollapseBtn.title = "Collapse toolbar";
+        this._toolbarCollapseBtn.innerHTML = '<i class="fa-solid fa-chevron-up"></i>';
+        this._toolbarCollapseBtn.addEventListener("click", event => {
+            event.preventDefault();
+            event.stopPropagation();
+            this.toggleEmbeddedToolbarCollapsed(true);
+        });
+
+        this._toolbarHostBarEl.append(this._toolbarSwitcherWrap, this._toolbarContentEl, this._toolbarCollapseBtn);
+
+        this._toolbarPeekEl = document.createElement("button");
+        this._toolbarPeekEl.type = "button";
+        this._toolbarPeekEl.id = `${this.id}-toolbar-peek`;
+        this._toolbarPeekEl.className = "btn btn-sm";
+        this._toolbarPeekEl.title = "Open toolbar";
+        this._toolbarPeekEl.innerHTML = '<i class="fa-solid fa-chevron-left"></i>';
+        this._toolbarPeekEl.style.position = "fixed";
+        this._toolbarPeekEl.style.right = "-6px";
+        this._toolbarPeekEl.style.zIndex = "995";
+        this._toolbarPeekEl.style.borderTopRightRadius = "0";
+        this._toolbarPeekEl.style.borderBottomRightRadius = "0";
+        this._toolbarPeekEl.style.paddingLeft = "0.6rem";
+        this._toolbarPeekEl.style.paddingRight = "0.7rem";
+        this._toolbarPeekEl.addEventListener("click", event => {
+            event.preventDefault();
+            event.stopPropagation();
+            this.openEmbeddedToolbar();
+        });
+
+        queueMicrotask(() => {
+            const btn = document.getElementById(this._toolbarDropdown.headerButton.id);
+            if (btn) {
+                btn.classList.add("btn", "btn-sm");
+                btn.style.minHeight = "2rem";
+                btn.style.height = "2rem";
+                btn.style.width = "2rem";
+                btn.style.padding = "0.35rem";
+            }
+        });
     }
 
     _ensureViewCategory() {
@@ -943,6 +1063,10 @@ export class MainLayout extends BaseComponent {
         }
 
         return view;
+    }
+
+    _shouldHideToolbarsForMobileGlobalWindow() {
+        return this._isFullscreen && window.innerWidth < this.collapseBreakpointPx;
     }
 
     _registerDockInView() {
@@ -1070,20 +1194,23 @@ export class MainLayout extends BaseComponent {
      * @returns {HTMLElement} Root element to attach to the DOM.
      */
     create() {
+        this._buildToolbarHost();
+
         // --- viewer core (IDs unchanged) ---
         const osd = div({ id:"osd", style:"position: absolute; top: 0; left: 0; right: 0; bottom: 0; pointer-events:auto;", class:"grow relative w-full overflow-hidden" });
-        const floatingToolbars = div({
-            id: "toolbars-container",
-            class: "absolute inset-0 pointer-events-none z-[980]"
-        });
-        const viewerWrap = div({ class:"relative flex-1 min-h-0" },
+        const viewerSurface = div(
+            { class:"relative flex-1 min-h-0" },
             osd,
-            floatingToolbars,
-            new RawHtml(null, `<div id="fullscreen-menu" class="bg-base-100"></div>`).create()
+            new RawHtml(null, `<div id="fullscreen-menu" class="bg-base-100"></div>`).create(),
+            this._toolbarFloatingEl
         );
-        const embeddedAbove = this._buildToolbarHostSlot("above");
-        const embeddedBelow = this._buildToolbarHostSlot("below");
-        const viewerArea = div({ class:"relative flex flex-col flex-1 min-h-0 min-w-0" }, embeddedAbove, viewerWrap, embeddedBelow);
+        const viewerWrap = div(
+            { class:"relative flex-1 min-w-0 min-h-0 flex flex-col" },
+            this._toolbarAboveEl,
+            viewerSurface,
+            this._toolbarBelowEl,
+            this._toolbarHiddenEl
+        );
 
         const topSide = new Div({ id: "top-side-wrapper" }, new RawHtml(null, `
             <div id="top-side" class="flex-row w-full glass" style="display: flex; position: relative; align-items: flex-start; height: 35px; pointer-events: none;">
@@ -1096,7 +1223,6 @@ export class MainLayout extends BaseComponent {
                 </div>
             </div>`).create());
         topSide.attachTo(document.getElementById('top-container'));
-
 
         // --- dock ---
         const dock = new Div({
@@ -1127,26 +1253,76 @@ origin-center
         });
         const dockNode = this._dockEl;
         const shell = div({ id:this.id, class:"absolute w-full h-full top-0 left-0 flex flex-row" },
-            this.position === "left" ? [dockNode, handle, viewerArea] : [viewerArea, handle, dockNode]
+            this.position === "left" ? [dockNode, handle, viewerWrap] : [viewerWrap, handle, dockNode]
         );
 
         this._shellEl = shell;
-        this._viewerEl = viewerArea;
-        this._viewerAreaEl = viewerArea;
-        this._toolbarFloatingEl = floatingToolbars;
+        this._viewerEl = viewerWrap;
         this._handleEl = handle;
+        shell.appendChild(this._toolbarPeekEl);
 
         this._syncMenuTabs();
         this._wireResize();
         this._applyResponsiveLayout();
         this._updateDockVisibility();
-        this.syncToolbarHost();
+        this._syncToolbars();
+
+        this.syncActiveViewerMobile();
+
+        if (window.VIEWER_MANAGER?.addHandler) {
+            VIEWER_MANAGER.addHandler("viewer-create", this._viewerMobileSyncBound);
+            VIEWER_MANAGER.addHandler("viewer-remove", this._viewerMobileSyncBound);
+        }
 
         return shell;
     }
 
     onLayoutChange(details) {
         this._applyResponsiveLayout();
-        this.syncToolbarHost();
+        this._syncToolbars();
+        this.syncActiveViewerMobile();
+    }
+
+    _getViewerLayoutCells() {
+        const VM = window.VIEWER_MANAGER;
+        const layout = VM?.layout;
+        const viewers = Array.isArray(VM?.viewers) ? VM.viewers.filter(Boolean) : [];
+
+        if (!layout || typeof layout.findCellById !== "function") {
+            return [];
+        }
+
+        return viewers
+            .map(viewer => ({
+                viewer,
+                cell: layout.findCellById(viewer?.id)
+            }))
+            .filter(entry => entry.viewer && entry.cell);
+    }
+
+    syncActiveViewerMobile() {
+        const VM = window.VIEWER_MANAGER;
+        const layout = VM?.layout;
+        if (!layout) return;
+
+        const isMobile = window.innerWidth < this.collapseBreakpointPx;
+        const activeViewer = VM?.get?.() || null;
+        const activeId = activeViewer?.id || null;
+
+        if (isMobile && activeId && typeof layout.showOnly === "function") {
+            layout.showOnly(activeId);
+        } else if (typeof layout.showAll === "function") {
+            layout.showAll();
+        }
+
+        requestAnimationFrame(() => {
+            const currentActive = VM?.get?.() || activeViewer;
+            try {
+                currentActive?.viewport?.resize?.();
+                currentActive?.forceRedraw?.();
+            } catch (e) {
+                // no-op
+            }
+        });
     }
 }

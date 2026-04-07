@@ -306,8 +306,8 @@ export function initXOpatLoader(ENV: XOpatCoreConfig, PLUGINS: Record<string, XO
     };
 
     /**
-     * Register a module globally. This ensures the module class is present in 
-     * `window.xmodules`, allowing dynamic lazy-instantiation across the system. 
+     * Register a module globally. This ensures the module class is present in
+     * `window.xmodules`, allowing dynamic lazy-instantiation across the system.
      * Strongly recommended for all modules.
      * @param id module id
      * @param ModuleClass class/class-like-function to register (not an instance!)
@@ -2893,6 +2893,8 @@ form.submit();
             // add initial viewer
             this.add(0);
             this.setActive(0, 'initial');
+            (window as any).LAYOUT.bindViewerManager?.();
+            (window as any).LAYOUT.syncActiveViewerMobile?.();
         }
 
         _resolveViewer(v: number | string | OpenSeadragon.Viewer | undefined | null) {
@@ -2960,18 +2962,18 @@ form.submit();
             v.addHandler("canvas-press", set);
 
             v.addOnceHandler &&
-                v.addOnceHandler("destroy", () => {
-                    if ((v as any).__managerDeleting) return;
+            v.addOnceHandler("destroy", () => {
+                if ((v as any).__managerDeleting) return;
 
-                    const wasActive = this.active === v;
-                    this.viewers = this.viewers.filter((x) => x !== v);
+                const wasActive = this.active === v;
+                this.viewers = this.viewers.filter((x) => x !== v);
 
-                    if (wasActive) {
-                        this._commitActive(this.viewers[0] || null, 'destroy');
-                    } else {
-                        this._syncActiveViewState();
-                    }
-                });
+                if (wasActive) {
+                    this._commitActive(this.viewers[0] || null, 'destroy');
+                } else {
+                    this._syncActiveViewState();
+                }
+            });
         }
 
         /**
@@ -3119,37 +3121,64 @@ form.submit();
             this.menu.onLayoutChange({ width: window.innerWidth });
             this.viewerMenus[cellId] = this.menu;
 
+            const preferredWebGlVersion = APPLICATION_CONTEXT.getOption("webGlPreferredVersion");
+            const flexDrawerOptions = {
+                webGlPreferredVersion: preferredWebGlVersion,
+                backgroundColor: APPLICATION_CONTEXT.getOption("background"),
+                debug: !!APPLICATION_CONTEXT.getOption("webglDebugMode"),
+                interactive: true,
+                htmlHandler: (shaderLayer, shaderConfig) => {
+                    viewer.getMenu().getShadersTab().createLayer(viewer, shaderLayer, shaderConfig);
+                },
+                htmlReset: () => viewer.getMenu().getShadersTab().clearLayers()
+            };
+
+            const flexRendererClass = (window.OpenSeadragon as any).FlexRenderer;
+            const renderingCapability = flexRendererClass && typeof flexRendererClass.ensureRuntimeSupport === "function"
+                ? flexRendererClass.ensureRuntimeSupport({
+                    webGLPreferredVersion: preferredWebGlVersion,
+                    debug: !!APPLICATION_CONTEXT.getOption("webglDebugMode"),
+                    throwOnFailure: false,
+                })
+                : { ok: false, error: "FlexRenderer self-test is not available." };
+            (APPLICATION_CONTEXT as any).__renderingCapability = renderingCapability;
+
+            const viewerOptions: Record<string, any> = {
+                id: cellId, // mount into that grid cell
+                navigatorId: navigatorId,
+                prefixUrl: ENV.openSeadragonPrefix + "images",
+                loadTilesWithAjax: true,
+                splitHashDataForPost: true,
+                subPixelRoundingForTransparency:
+                    navigator.userAgent.includes("Chrome") && navigator.vendor.includes("Google Inc") ?
+                        window.OpenSeadragon.SUBPIXEL_ROUNDING_OCCURRENCES.NEVER :
+                        window.OpenSeadragon.SUBPIXEL_ROUNDING_OCCURRENCES.ONLY_AT_REST,
+                debugMode: APPLICATION_CONTEXT.getOption("debugMode", false, false),
+                maxImageCacheCount: APPLICATION_CONTEXT.getOption("maxImageCacheCount", undefined, false)
+            };
+
+            if (renderingCapability.ok) {
+                viewerOptions.drawer = 'flex-renderer';
+                viewerOptions.drawerOptions = {
+                    'flex-renderer': flexDrawerOptions
+                };
+            } else {
+                // we would likely want to change the renderer for some alternative, right now no other renderer is capable anyway :/
+                viewerOptions.drawer = 'flex-renderer';
+                viewerOptions.drawerOptions = {
+                    'flex-renderer': flexDrawerOptions
+                };
+                console.warn('FlexRenderer runtime self-test failed. Falling back to the default drawer.', renderingCapability.error || renderingCapability);
+                // todo display screen-wide error (only once!)
+            }
+
             const viewer = window.OpenSeadragon($.extend(
                 true,
                 ENV.openSeadragonConfiguration,
                 ENV.client.osdOptions,
-                {
-                    id: cellId, // mount into that grid cell
-                    navigatorId: navigatorId,
-                    prefixUrl: ENV.openSeadragonPrefix + "images",
-                    loadTilesWithAjax: true,
-                    drawer: 'flex-renderer',
-                    drawerOptions: {
-                        'flex-renderer': {
-                            webGlPreferredVersion: APPLICATION_CONTEXT.getOption("webGlPreferredVersion"),
-                            backgroundColor: APPLICATION_CONTEXT.getOption("background"),
-                            debug: !!APPLICATION_CONTEXT.getOption("webglDebugMode"),
-                            interactive: true,
-                            htmlHandler: (shaderLayer, shaderConfig) => {
-                                viewer.getMenu().getShadersTab().createLayer(viewer, shaderLayer, shaderConfig);
-                            },
-                            htmlReset: () => viewer.getMenu().getShadersTab().clearLayers()
-                        }
-                    },
-                    splitHashDataForPost: true,
-                    subPixelRoundingForTransparency:
-                        navigator.userAgent.includes("Chrome") && navigator.vendor.includes("Google Inc") ?
-                            window.OpenSeadragon.SUBPIXEL_ROUNDING_OCCURRENCES.NEVER :
-                            window.OpenSeadragon.SUBPIXEL_ROUNDING_OCCURRENCES.ONLY_AT_REST,
-                    debugMode: APPLICATION_CONTEXT.getOption("debugMode", false, false),
-                    maxImageCacheCount: APPLICATION_CONTEXT.getOption("maxImageCacheCount", undefined, false)
-                }
+                viewerOptions
             ));
+            (viewer as any).__renderingCapability = renderingCapability;
 
             $(viewer.element).on('contextmenu', function (event: Event) {
                 event.preventDefault();

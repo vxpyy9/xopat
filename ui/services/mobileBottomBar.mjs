@@ -15,7 +15,7 @@ export class MobileBottomBar {
     }
 
     init() {
-        this._breakpoint = APPLICATION_CONTEXT.getOption("maxMobileWidthPx");
+        this._breakpoint = APPLICATION_CONTEXT.getOption("maxMobileWidthPx", undefined, false, true);
         this.context = document.getElementById("bottom-container");
         if (!this.context) {
             console.warn("MobileBottomBar: #bottom-container not found.");
@@ -24,7 +24,7 @@ export class MobileBottomBar {
 
         this.root = this._build();
 
-        if (!window.LAYOUT?.getToolbarFloatingContainer?.() && !document.getElementById("toolbars-container")) {
+        if (!document.getElementById("toolbars-container")) {
             const toolbarsContainer = new Div({ id:"toolbars-container", class:"w-full", style:"pointer-events: none; position: absolute; top: 0; left: 0; z-index: 980;" });
             toolbarsContainer.attachTo(this.context);
         }
@@ -176,20 +176,62 @@ export class MobileBottomBar {
         const width = details?.width ?? window.innerWidth;
         if (!this.context) return;
 
-
         const isMobile = this._isMobileWidth(width);
+
         if (isMobile) {
             this.context.style.height = "auto";
-            this.context.style.overflow =  "visible" ;
-            this._setToolbarsVisible(this._activePanel === "globalMenu");
+            this.context.style.overflow = "visible";
+
+            // Mobile embedded mode should not rely on the old floating toolbar container.
+            this._setToolbarsVisible(false);
         } else {
             this.context.style.height = "0px";
             this.context.style.overflow = "hidden";
             this._closeViewerPicker();
             this._setActivePanel(null);
+
+            // Desktop floating mode still uses the floating container.
             this._setToolbarsVisible(true);
         }
 
+        this.sync();
+    }
+
+    _hideGlobalMenu() {
+        const isMobile = this._isMobileWidth();
+
+        if (isMobile) {
+            window.LAYOUT?.closeGlobalMenuMobile?.();
+            return;
+        }
+
+        const toolbars = document.getElementById("toolbars-container");
+        if (toolbars) toolbars.style.display = "none";
+        this._setToolbarsVisible(true);
+
+        if (window.LAYOUT?.isOpened?.()) {
+            window.LAYOUT.hideGlobalMenu?.();
+        }
+    }
+
+    showGlobalMenu() {
+        if (this._activePanel === "globalMenu") return;
+
+        this._closeViewerPicker();
+        this._hideViewerMenus();
+
+        const isMobile = this._isMobileWidth();
+
+        if (isMobile) {
+            this._setToolbarsVisible(false);
+            window.LAYOUT?.openGlobalMenuMobile?.();
+        } else {
+            this._setToolbarsVisible(true);
+            window.LAYOUT?.closeFullscreen?.();
+            window.LAYOUT?.showGlobalMenu?.();
+        }
+
+        this._setActivePanel("globalMenu");
         this.sync();
     }
 
@@ -215,6 +257,7 @@ export class MobileBottomBar {
         const nextId = activeViewer?.id || null;
         if (nextId !== this._activeViewerId) {
             this._activeViewerId = nextId;
+            window.LAYOUT.syncActiveViewerMobile?.();
         }
 
         if (this.viewerButton) {
@@ -292,6 +335,7 @@ export class MobileBottomBar {
                 e.preventDefault();
                 e.stopPropagation();
                 window.VIEWER_MANAGER?.setActive?.(viewer);
+                window.LAYOUT?.syncActiveViewerMobile?.();
                 this.sync();
                 this._closeViewerPicker();
                 this._setActivePanel("viewer");
@@ -372,7 +416,7 @@ export class MobileBottomBar {
     }
 
     _getToolbarsContainer() {
-        return window.LAYOUT?.getToolbarFloatingContainer?.() || document.getElementById("toolbars-container");
+        return document.getElementById("toolbars-container");
     }
 
     _setToolbarsVisible(visible) {
@@ -398,15 +442,6 @@ export class MobileBottomBar {
         this.getViewerMenus().forEach((menu) => this._hideViewerMenu(menu));
     }
 
-    _hideGlobalMenu() {
-        const toolbars = this._getToolbarsContainer();
-        if (toolbars) toolbars.style.display = "none";
-        this._setToolbarsVisible(!this._isMobileWidth());
-        if (window.LAYOUT?.isOpened?.()) {
-            window.LAYOUT.toggle?.();
-        }
-    }
-
     showViewerMenus() {
         const menus = this.getViewerMenus();
         if (!menus.length) return;
@@ -418,24 +453,6 @@ export class MobileBottomBar {
 
         menus.forEach((menu) => this._showViewerMenu(menu));
         this._setActivePanel("viewerMenu");
-        this.sync();
-    }
-
-    showGlobalMenu() {
-        if (this._activePanel === "globalMenu") return;
-
-        this._closeViewerPicker();
-        this._hideViewerMenus();
-
-        this._setToolbarsVisible(true);
-
-        window.LAYOUT?.closeFullscreen?.();
-        window.LAYOUT?.toggle?.();
-        if (!window.LAYOUT?.isOpened?.()) {
-            window.LAYOUT?.show?.();
-        }
-
-        this._setActivePanel("globalMenu");
         this.sync();
     }
 }

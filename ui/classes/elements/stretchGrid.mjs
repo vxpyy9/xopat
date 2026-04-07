@@ -16,12 +16,17 @@ export class StretchGrid extends BaseComponent {
         this.aspect = options.aspect || "4/3";
         this.items = [];
 
+        this._soloItemId = null;
+        this._savedColsBeforeSolo = null;
+
         // API exposure
         this.setItems = this.setItems.bind(this);
         this.push = this.push.bind(this);
         this.removeAt = this.removeAt.bind(this);
         this.setCols = this.setCols.bind(this);
         this.setAspect = this.setAspect.bind(this);
+        this.showOnly = this.showOnly.bind(this);
+        this.showAll = this.showAll.bind(this);
     }
 
     setItems(itemsOrCount) {
@@ -107,6 +112,57 @@ export class StretchGrid extends BaseComponent {
 
     findCellById(id) {
         return this.items.find(el => el.id === id);
+    }
+
+    showOnly(id) {
+        if (!id) return this.showAll();
+
+        const target = this.findCellById(id);
+        if (!target) return this.showAll();
+
+        if (this._savedColsBeforeSolo == null) {
+            this._savedColsBeforeSolo = this.cols;
+        }
+
+        this._soloItemId = id;
+        this.cols = 1;
+        this._layout();
+
+        for (const el of this.items) {
+            const isActive = el.id === id;
+
+            el.style.display = isActive ? "" : "none";
+            el.style.visibility = isActive ? "visible" : "hidden";
+            el.style.pointerEvents = isActive ? "" : "none";
+            el.style.width = isActive ? "100%" : "0";
+            el.style.height = isActive ? "100%" : "0";
+            el.style.minWidth = isActive ? "0" : "0";
+            el.style.minHeight = isActive ? "0" : "0";
+            el.style.flex = isActive ? "1 1 auto" : "0 0 0";
+            el.style.gridColumn = isActive ? "1 / -1" : "";
+        }
+    }
+
+    showAll() {
+        if (this._savedColsBeforeSolo != null) {
+            this.cols = this._savedColsBeforeSolo;
+        }
+
+        this._soloItemId = null;
+        this._savedColsBeforeSolo = null;
+        this._layout();
+
+        for (const el of this.items) {
+            el.style.display = "";
+            el.style.visibility = "";
+            el.style.pointerEvents = "";
+            el.style.width = "";
+            el.style.height = "";
+            el.style.minWidth = "";
+            el.style.minHeight = "";
+            el.style.flex = "";
+            el.style.gridColumn = "";
+        }
     }
 
     _layout() {

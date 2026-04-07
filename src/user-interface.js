@@ -664,7 +664,13 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
                     html = [html];
                 }
                 const menu = new UI.Toolbar(
-                    {id: `toolbar-${ownerPluginId}`, horizontalOnly: forceHorizontal, pluginRootClass: `plugin-${ownerPluginId}-root`},
+                    {
+                        id: `toolbar-${ownerPluginId}`,
+                        horizontalOnly: forceHorizontal,
+                        pluginRootClass: `plugin-${ownerPluginId}-root`,
+                        embeddedTitle: title,
+                        embeddedIcon: icon,
+                    },
                     {
                         id: ownerPluginId+"-"+toolsMenuId+"-tools-panel",
                         icon: icon,
@@ -672,9 +678,10 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
                         body: html,
                     }
                 );
-                const toolbarContainer = window.LAYOUT?.getToolbarFloatingContainer?.()
-                    || document.getElementById('toolbars-container');
-                menu.attachTo(toolbarContainer);
+                const container = window.LAYOUT?._toolbarFloatingEl || document.getElementById('toolbars-container');
+                if (container) {
+                    menu.attachTo(container);
+                }
                 window.LAYOUT?.registerToolbar?.(menu);
                 menu.onLayoutChange({width: window.innerWidth});
 

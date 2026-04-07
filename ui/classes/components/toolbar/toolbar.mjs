@@ -70,7 +70,7 @@ class Toolbar extends BaseComponent {
         this._dir = "horizontal";
         this._edgeThreshold = Number.isFinite(options.edgeThreshold) ? Number(options.edgeThreshold) : 96;
         this._horizontalOnly = !!options.horizontalOnly;
-        this._mobileBreakpoint = Number(APPLICATION_CONTEXT.getOption("maxMobileWidthPx")) || 600;
+        this._mobileBreakpoint = APPLICATION_CONTEXT.getOption("maxMobileWidthPx", undefined, false, true);
 
         const wMin = this.options.horizontalOnly ? "min-w-max" : "";
         this.classMap["base"] = `draggable flex flex-col bg-transparent pointer-events-none ${wMin} ${this.options.pluginRootClass || ""}`;
@@ -85,10 +85,12 @@ class Toolbar extends BaseComponent {
         this._observer = null;
         this._lastBox = null;
         this._fmToken = null;
-        this._embedded = false;
-        this._embeddedActive = true;
-        this._floatingParent = null;
-        this._observersSetup = false;
+        this._dragEnabled = false;
+
+        this._embeddedMode = false;
+        this._managedVisible = true;
+        this._embeddedTitle = options.embeddedTitle || null;
+        this._embeddedIcon = options.embeddedIcon || null;
 
         this.visibility = new VisibilityManager(this);
         USER_INTERFACE.AppBar.View.registerViewComponent('toolbarMenu',
@@ -165,7 +167,7 @@ class Toolbar extends BaseComponent {
             }, ...content);
         }
 
-        return { headerButton: b, contentDiv: c, id: item.id, title: inText, icon: item.icon };
+        return { headerButton: b, contentDiv: c };
     }
 
     create() {
@@ -222,121 +224,20 @@ class Toolbar extends BaseComponent {
         this.visibility.initOnRootNode(this._outerEl);
 
         queueMicrotask(() => {
-            this._floatingParent = this._outerEl?.parentElement || null;
-            this._activateFloatingMode();
+            if (this._embeddedMode) {
+                this._applyEmbeddedStyles();
+                this._setOrientation("horizontal", true);
+            } else {
+                this._applyFloatingStyles();
+                this._updateOrientationFromPosition(true);
+                this._ensureFloatingRegistration();
+            }
+            this._ensureDragBinding();
             this._setupObservers();
+            this._applyManagedVisibility();
         });
 
         return this._outerEl;
-    }
-
-    _activateFloatingMode() {
-        if (!this._outerEl) return;
-        this._embedded = false;
-
-        const left = Number(APPLICATION_CONTEXT.AppCache.get(`${this.id}-PositionLeft`, 50));
-        const top = Number(APPLICATION_CONTEXT.AppCache.get(`${this.id}-PositionTop`, 50));
-        this._outerEl.style.position = "fixed";
-        this._outerEl.style.left = `${left}px`;
-        this._outerEl.style.top = `${top}px`;
-        this._outerEl.style.width = "";
-        this._outerEl.style.maxWidth = "";
-        this._outerEl.style.display = this.display;
-        this._outerEl.classList.remove("w-full", "max-w-full", "embedded-toolbar-instance");
-        this._outerEl.querySelector(".handle")?.classList.remove("hidden");
-
-        this._fmToken = UI.Services.FloatingManager.register({
-            el: this._outerEl,
-            owner: this,
-            clamp: {
-                margin: 6,
-                topBarId: "top-side",
-                cache: {
-                    leftKey: `${this.id}-PositionLeft`,
-                    topKey: `${this.id}-PositionTop`
-                }
-            }
-        });
-
-        const handle = this._outerEl.querySelector(".handle");
-        if (handle) {
-            UI.Services.FloatingManager.enableDrag(this._fmToken, {
-                handle,
-                persist: {
-                    leftKey: `${this.id}-PositionLeft`,
-                    topKey: `${this.id}-PositionTop`
-                },
-                onMove: () => {
-                    this._updateOrientationFromPosition(false, { dragging: true });
-                    if (this._rootWrap) {
-                        this._rootWrap.dispatchEvent(new CustomEvent("toolbar:measure", {
-                            bubbles: true,
-                            detail: { dir: this._dir, size: 32, gap: "gap-1" }
-                        }));
-                    }
-                }
-            });
-        }
-
-        this._updateOrientationFromPosition(true);
-    }
-
-    _deactivateFloatingMode() {
-        if (this._fmToken) {
-            UI.Services.FloatingManager.unregister(this._fmToken);
-            this._fmToken = null;
-        }
-    }
-
-    setEmbedded(next, options = {}) {
-        if (!this._outerEl) return false;
-
-        const embedded = !!next;
-        const targetContainer = options.container || null;
-        const active = options.active !== false;
-
-        if (embedded) {
-            this._deactivateFloatingMode();
-            if (targetContainer && this._outerEl.parentNode !== targetContainer) {
-                targetContainer.appendChild(this._outerEl);
-            }
-            this._embedded = true;
-            this._embeddedActive = active;
-            this._outerEl.style.position = "relative";
-            this._outerEl.style.left = "";
-            this._outerEl.style.top = "";
-            this._outerEl.style.width = "100%";
-            this._outerEl.style.maxWidth = "100%";
-            this._outerEl.classList.add("w-full", "max-w-full", "embedded-toolbar-instance", "flex-row");
-            this._outerEl.classList.remove("flex-col", "flex-col-reverse");
-            this._outerEl.querySelector(".handle")?.classList.add("hidden");
-            this._setOrientation("horizontal", true);
-            this._outerEl.style.display = active ? "" : "none";
-            return true;
-        }
-
-        if (options.container && this._outerEl.parentNode !== options.container) {
-            options.container.appendChild(this._outerEl);
-        } else if (this._floatingParent && this._outerEl.parentNode !== this._floatingParent) {
-            this._floatingParent.appendChild(this._outerEl);
-        }
-
-        this._activateFloatingMode();
-        return true;
-    }
-
-    setEmbeddedActive(active) {
-        this._embeddedActive = !!active;
-        if (!this._outerEl) return;
-        this._outerEl.style.display = this._embeddedActive ? "" : "none";
-    }
-
-    getEmbeddedMeta() {
-        const activeTab = this.tabs[this._focused] || Object.values(this.tabs)[0] || null;
-        return {
-            title: activeTab?.title || this.id,
-            icon: typeof activeTab?.icon === "string" ? activeTab.icon : "fa-wrench"
-        };
     }
 
     _setOrientation(dir, force = false) {
@@ -396,6 +297,144 @@ class Toolbar extends BaseComponent {
         }
     }
 
+
+    getRootNode() {
+        return this._outerEl || document.getElementById(this.id) || null;
+    }
+
+    getEmbeddedMeta() {
+        const firstTab = Object.keys(this.tabs)[0];
+        const firstHeader = firstTab ? this.tabs[firstTab]?.headerButton : null;
+        return {
+            id: this.id,
+            title: this._embeddedTitle || firstHeader?.extraProperties?.title?.val || this.id,
+            icon: this._embeddedIcon || 'fa-wrench'
+        };
+    }
+
+    isRequestedVisible() {
+        return typeof this.visibility?.is === "function"
+            ? !!this.visibility.is()
+            : this.display !== "none";
+    }
+
+    setManagedVisible(visible) {
+        this._managedVisible = !!visible;
+        this._applyManagedVisibility();
+    }
+
+    setEmbeddedMode(embedded) {
+        this._embeddedMode = !!embedded;
+        if (this._embeddedMode) {
+            this._disableFloatingRegistration();
+            this._applyEmbeddedStyles();
+            this._setOrientation("horizontal", true);
+        } else {
+            this._applyFloatingStyles();
+            this._updateOrientationFromPosition(true);
+            this._ensureFloatingRegistration();
+        }
+        this._applyManagedVisibility();
+    }
+
+    _applyManagedVisibility() {
+        const root = this.getRootNode();
+        if (!root) return;
+        root.style.display = this._managedVisible ? "" : "none";
+    }
+
+    _applyEmbeddedStyles() {
+        const root = this.getRootNode();
+        const wrap = this._rootWrap;
+        if (!root || !wrap) return;
+
+        root.style.position = "relative";
+        root.style.left = "";
+        root.style.top = "";
+        root.style.zIndex = "";
+        root.style.maxWidth = "100%";
+        root.style.width = "auto";
+        root.style.transform = "";
+
+        root.classList.remove("flex-col", "flex-col-reverse");
+        root.classList.add("flex-row", "items-center", "max-w-full", "w-auto");
+
+        const spacer = root.querySelector(".spacer");
+        spacer?.classList.add("hidden");
+        root.querySelector(".handle")?.classList.add("hidden");
+
+        wrap.classList.remove("w-10", "h-10", "w-full", "h-full", "flex-col", "flex-col-reverse");
+        wrap.classList.add("flex", "flex-row", "items-center", "max-w-full");
+    }
+
+    _applyFloatingStyles() {
+        const root = this.getRootNode();
+        const wrap = this._rootWrap;
+        if (!root || !wrap) return;
+
+        root.style.position = "fixed";
+        root.style.left = `${Number(APPLICATION_CONTEXT.AppCache.get(`${this.id}-PositionLeft`, 50))}px`;
+        root.style.top = `${Number(APPLICATION_CONTEXT.AppCache.get(`${this.id}-PositionTop`, 50))}px`;
+        root.style.maxWidth = "";
+        root.style.width = "";
+
+        const spacer = root.querySelector(".spacer");
+        spacer?.classList.remove("hidden");
+        root.querySelector(".handle")?.classList.remove("hidden");
+
+        wrap.classList.remove("max-w-full");
+    }
+
+    _ensureFloatingRegistration() {
+        if (this._embeddedMode || !this._outerEl) return;
+        const clamp = {
+            margin: 6,
+            topBarId: "top-side",
+            cache: {
+                leftKey: `${this.id}-PositionLeft`,
+                topKey:  `${this.id}-PositionTop`
+            }
+        };
+        if (this._fmToken) {
+            UI.Services.FloatingManager.updateClamp?.(this._fmToken, clamp);
+        } else {
+            this._fmToken = UI.Services.FloatingManager.register({
+                el: this._outerEl,
+                owner: this,
+                clamp
+            });
+        }
+        this._ensureDragBinding();
+    }
+
+    _disableFloatingRegistration() {
+        if (!this._fmToken) return;
+        UI.Services.FloatingManager.updateClamp?.(this._fmToken, null);
+    }
+
+    _ensureDragBinding() {
+        if (this._dragEnabled || !this._outerEl || !this._fmToken) return;
+        const handle = this._outerEl.querySelector(".handle");
+        if (!handle) return;
+        this._dragEnabled = true;
+        UI.Services.FloatingManager.enableDrag(this._fmToken, {
+            handle,
+            persist: {
+                leftKey: `${this.id}-PositionLeft`,
+                topKey:  `${this.id}-PositionTop`
+            },
+            onMove: () => {
+                this._updateOrientationFromPosition(false, { dragging: true });
+                if (this._rootWrap) {
+                    this._rootWrap.dispatchEvent(new CustomEvent("toolbar:measure", {
+                        bubbles: true,
+                        detail: { dir: this._dir, size: 32, gap: "gap-1" }
+                    }));
+                }
+            }
+        });
+    }
+
     
     isVisible() { return !this._outerEl.classList.contains("display-none"); }
     
@@ -411,8 +450,6 @@ class Toolbar extends BaseComponent {
 
     // ----- observers & orientation -----
     _setupObservers() {
-        if (this._observersSetup) return;
-        this._observersSetup = true;
         const root = this._outerEl;
         const wrap = this._rootWrap;
         if (!root || !wrap) return;
@@ -455,7 +492,9 @@ class Toolbar extends BaseComponent {
 
     _updateOrientationFromPosition(force = false, opts = {}) {
         if (!this._outerEl || !this._rootWrap) return;
-        if (this._embedded) {
+
+        if (this._embeddedMode) {
+            this._applyEmbeddedStyles();
             this._setOrientation("horizontal", true);
             return;
         }
@@ -561,7 +600,6 @@ class Toolbar extends BaseComponent {
             this.tabs[id].headerButton.setClass("tab-active", "tab-active");
             this.tabs[id].contentDiv?.setClass("display", "");
             this._focused = id;
-            window.LAYOUT?.syncToolbarHost?.();
             return true;
         }
         return false;
@@ -577,18 +615,24 @@ class Toolbar extends BaseComponent {
     onLayoutChange(details) {
         const root = this._outerEl;
         if (!root) return;
-        const width = details?.width ?? window.innerWidth;
 
-        if (this._embedded || width < this._mobileBreakpoint) {
-            this.setClass("mobile", width < this._mobileBreakpoint ? "mobile" : "");
+        const width = details?.width ?? window.innerWidth;
+        const isCompact = this._embeddedMode || width < this._mobileBreakpoint;
+
+        if (isCompact) {
+            this.setClass("mobile", "mobile");
             root.querySelector(".handle")?.classList.add("hidden");
+            this._applyEmbeddedStyles();
             this._setOrientation("horizontal", true);
-            return;
+        } else {
+            this.setClass("mobile", "");
+            root.querySelector(".handle")?.classList.remove("hidden");
+            this._applyFloatingStyles();
+            this._ensureFloatingRegistration();
+            this._updateOrientationFromPosition(true);
         }
 
-        this.setClass("mobile", "");
-        root.querySelector(".handle")?.classList.remove("hidden");
-        this._setOrientation("horizontal", false);
+        this._applyManagedVisibility();
     }
 }
 

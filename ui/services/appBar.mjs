@@ -543,7 +543,6 @@ export class AppBar {
         }
     }
     onLayoutChange(details) {
-        console.log("Layout change detected in AppBar:", details);
         if (details.width < 600) {
             this.rightMenu.setClass("display", "hidden");
             this.rightMenuCollapsed.setClass("display", "");
