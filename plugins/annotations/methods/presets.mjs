@@ -478,8 +478,6 @@ export const presetMethods = {
 
         setTimeout(() => {
             this._closePresetDialog();
-            this._bvselect = null;
-
             // If it's already active, send undefined to remove the assignment
             this.context.setPreset(isAlreadyActive ? undefined : preset, isLeft);
         }, 150);

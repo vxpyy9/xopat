@@ -26,6 +26,11 @@ export const handlerMethods = {
         this.context.addHandler('import', () => {
             this._refreshAllPresetLists?.();
             this._refreshAllAuthorLists?.();
+            this._refreshAllAnnotationFilterBadges?.();
+            this._refreshAllBoardPanels?.();
+        });
+        this.context.addHandler('annotation-filter-change', () => {
+            this._refreshAllAnnotationFilterBadges?.();
             this._refreshAllBoardPanels?.();
         });
         this.context.addHandler('enabled', this.annotationsEnabledHandler.bind(this));

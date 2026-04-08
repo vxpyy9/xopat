@@ -56,6 +56,185 @@ export const viewerMenuMethods = {
         });
     },
 
+    _refreshAnnotationFilterBadges(viewerOrId = undefined) {
+        const state = this._getViewerUI(viewerOrId);
+        if (!state?.filterBadges) return;
+
+        const filters = this.context.getAnnotationFilters?.() || [];
+        const badges = filters.map(filter => {
+            const description = this.context.describeAnnotationFilter?.(filter);
+            const node = document.createElement('span');
+            node.className = 'badge badge-outline badge-sm gap-1';
+            node.textContent = description?.text || filter.id;
+
+            const remove = document.createElement('button');
+            remove.type = 'button';
+            remove.className = 'btn btn-ghost btn-xs btn-square min-h-0 h-4 w-4 ml-1';
+            remove.title = this.t('annotations.filters.remove');
+            remove.appendChild(document.createTextNode('×'));
+            remove.onclick = (e) => {
+                e.stopPropagation();
+                this.context.removeAnnotationFilter?.(filter.id);
+            };
+            node.appendChild(remove);
+            return node;
+        });
+
+        if (!badges.length) {
+            const empty = document.createElement('div');
+            empty.className = 'text-xs opacity-50';
+            empty.textContent = this.t('annotations.filters.empty');
+            state.filterBadges.replaceChildren(empty);
+            return;
+        }
+
+        state.filterBadges.replaceChildren(...badges);
+    },
+
+    _openAnnotationFilterModal(viewerOrId = undefined) {
+        const viewerId = this._resolveViewerId(viewerOrId);
+        const available = this.context.getAvailableAnnotationFilterValues?.(viewerId) || {};
+        const active = this.context.getAnnotationFilters?.() || [];
+        const activeByType = new Map(active.map(filter => [filter.type, filter]));
+
+        const body = document.createElement('div');
+        body.className = 'flex flex-col gap-4';
+
+        const createSelectionSection = (type, title) => {
+            const wrapper = document.createElement('div');
+            wrapper.className = 'flex flex-col gap-2';
+
+            const header = document.createElement('div');
+            header.className = 'text-sm font-medium';
+            header.textContent = title;
+            wrapper.appendChild(header);
+
+            const select = new UI.TagSelect({
+                placeholder: this.t('annotations.filters.selectPlaceholder'),
+                searchPlaceholder: this.t('annotations.filters.searchPlaceholder'),
+                emptyText: this.t('annotations.filters.noneAvailable'),
+                options: available[type] || [],
+                selected: activeByType.get(type)?.values || []
+            });
+            wrapper.appendChild(select.create());
+            return { wrapper, select };
+        };
+
+        const instanceSection = createSelectionSection('instanceId', this.t('annotations.filters.fields.instanceId'));
+        const authorSection = createSelectionSection('author', this.t('annotations.filters.fields.author'));
+        const presetSection = createSelectionSection('presetName', this.t('annotations.filters.fields.presetName'));
+        const factorySection = createSelectionSection('factoryType', this.t('annotations.filters.fields.factoryType'));
+
+        const rectFilter = activeByType.get('boundingRect')?.rect || {};
+        const rectWrapper = document.createElement('div');
+        rectWrapper.className = 'flex flex-col gap-2';
+        const rectTitle = document.createElement('div');
+        rectTitle.className = 'text-sm font-medium';
+        rectTitle.textContent = this.t('annotations.filters.fields.boundingRect');
+        rectWrapper.appendChild(rectTitle);
+
+        const rectGrid = document.createElement('div');
+        rectGrid.className = 'grid grid-cols-2 gap-2';
+        const rectInputs = {};
+        for (const key of ['x', 'y', 'width', 'height']) {
+            const inputWrap = document.createElement('label');
+            inputWrap.className = 'form-control';
+            const caption = document.createElement('span');
+            caption.className = 'label-text text-xs opacity-60';
+            caption.textContent = key;
+            const field = document.createElement('input');
+            field.type = 'number';
+            field.step = '1';
+            field.className = 'input input-bordered input-sm w-full';
+            field.value = rectFilter[key] ?? '';
+            rectInputs[key] = field;
+            inputWrap.append(caption, field);
+            rectGrid.appendChild(inputWrap);
+        }
+        rectWrapper.appendChild(rectGrid);
+
+        body.append(
+            instanceSection.wrapper,
+            authorSection.wrapper,
+            presetSection.wrapper,
+            factorySection.wrapper,
+            rectWrapper
+        );
+
+        const modal = new UI.Modal({
+            id: `${this.id}-annotation-filter-modal`,
+            header: this.t('annotations.filters.modalTitle'),
+            body,
+            footer: (() => {
+                const footer = document.createElement('div');
+                footer.className = 'flex w-full justify-between gap-2';
+
+                const clearBtn = document.createElement('button');
+                clearBtn.type = 'button';
+                clearBtn.className = 'btn btn-ghost';
+                clearBtn.textContent = this.t('annotations.filters.clear');
+                clearBtn.onclick = () => {
+                    this.context.clearAnnotationFilters?.();
+                    modal.close();
+                };
+
+                const actions = document.createElement('div');
+                actions.className = 'flex gap-2';
+
+                const cancelBtn = document.createElement('button');
+                cancelBtn.type = 'button';
+                cancelBtn.className = 'btn btn-ghost';
+                cancelBtn.textContent = this.t('common.cancel');
+                cancelBtn.onclick = () => modal.close();
+
+                const saveBtn = document.createElement('button');
+                saveBtn.type = 'button';
+                saveBtn.className = 'btn btn-primary';
+                saveBtn.textContent = this.t('annotations.filters.apply');
+                saveBtn.onclick = () => {
+                    const filters = [];
+                    const collect = (type, control) => {
+                        const values = control.getValue();
+                        if (values.length) filters.push({ type, values });
+                    };
+
+                    collect('instanceId', instanceSection.select);
+                    collect('author', authorSection.select);
+                    collect('presetName', presetSection.select);
+                    collect('factoryType', factorySection.select);
+
+                    const rectValues = Object.fromEntries(
+                        Object.entries(rectInputs).map(([key, field]) => [key, field.value.trim()])
+                    );
+                    const rectTouched = Object.values(rectValues).some(Boolean);
+                    const rect = {
+                        x: Number(rectValues.x),
+                        y: Number(rectValues.y),
+                        width: Number(rectValues.width),
+                        height: Number(rectValues.height)
+                    };
+                    if (
+                        rectTouched &&
+                        Object.values(rect).every(Number.isFinite) &&
+                        rect.width > 0 &&
+                        rect.height > 0
+                    ) {
+                        filters.push({ type: 'boundingRect', rect });
+                    }
+
+                    this.context.setAnnotationFilters?.(filters);
+                    modal.close();
+                };
+
+                actions.append(cancelBtn, saveBtn);
+                footer.append(clearBtn, actions);
+                return footer;
+            })()
+        }).mount();
+
+        modal.open();
+    },
+
     initViewerMenu() {
         this.registerViewerMenu((viewer) => {
             const viewerId = viewer.uniqueId;
@@ -122,7 +301,20 @@ export const viewerMenuMethods = {
                 div({ class: 'pt-4' }, state.presetInner)
             );
 
+            state.filterBadges = div({ class: 'flex flex-wrap gap-1 mt-2 mb-2 min-h-6' });
             state.annotationList = div({ class: `mx-2 mt-2 flex-1 min-h-0 ${state.currentTab === 'annot' ? '' : 'hidden'}`.trim() },
+                div({ class: 'flex items-center justify-between gap-2 mb-2' },
+                    span({ class: 'text-[10px] uppercase font-bold opacity-50' }, this.t('annotations.filters.title')),
+                    button({
+                        type: 'button',
+                        class: 'btn btn-ghost btn-xs',
+                        onclick: () => this._openAnnotationFilterModal(viewerId)
+                    },
+                        span({ class: 'fa-auto fa-filter mr-1 text-xs' }),
+                        this.t('annotations.filters.button')
+                    )
+                ),
+                state.filterBadges,
                 state.boardPanel.create()
             );
 
@@ -166,6 +358,7 @@ export const viewerMenuMethods = {
 
             requestAnimationFrame(() => {
                 this._renderPresetList(viewerId);
+                this._refreshAnnotationFilterBadges(viewerId);
                 // todo race condition, accesses canvas instance, still, this update is too slow and fired too often, fix it
                 //this._populateAuthorsList(viewerId);
                 if (state.currentTab === 'annot') state.boardPanel.mount();
@@ -363,7 +556,10 @@ export const viewerMenuMethods = {
 
         if (type === 'preset') this._renderPresetList(viewerId);
         else if (type === 'authors') this._populateAuthorsList(viewerId);
-        else state.boardPanel?.mount();
+        else {
+            this._refreshAnnotationFilterBadges(viewerId);
+            state.boardPanel?.mount();
+        }
     },
 
     _renderPresetList(viewerOrId = undefined) {
@@ -470,6 +666,10 @@ export const viewerMenuMethods = {
         for (const viewer of VIEWER_MANAGER.viewers || []) {
             this._getViewerUI(viewer.uniqueId)?.boardPanel?.requestRender();
         }
+    },
+
+    _refreshAllAnnotationFilterBadges() {
+        for (const viewer of VIEWER_MANAGER.viewers || []) this._refreshAnnotationFilterBadges(viewer.uniqueId);
     },
 
     _refreshAllPresetLists() {

@@ -1347,7 +1347,8 @@ OSDAnnotations.FabricWrapper = class OSDAnnotationsFabricWrapper extends XOpatVi
 
         const annotationsEnabled = !this.module.disabledInteraction;
         const layer = object.layerID ? this.getLayer(String(object.layerID)) : null;
-        const shouldShow = annotationsEnabled && (!layer || layer.visible !== false);
+        const passesFilter = !this.isAnnotation(object) || this.module.annotationMatchesFilters(object);
+        const shouldShow = annotationsEnabled && (!layer || layer.visible !== false) && passesFilter;
 
         const factory = this.module.getAnnotationObjectFactory(object.factoryID);
         const isEditable = !!factory?.isEditable();
@@ -1393,6 +1394,39 @@ OSDAnnotations.FabricWrapper = class OSDAnnotationsFabricWrapper extends XOpatVi
             object.lockSkewingY = true;
             object.lockUniScaling = true;
             object.hasControls = false;
+        }
+    }
+
+    /**
+     * Reapplies annotation visibility, including active annotation filters, to all full annotations in this viewer.
+     * @param {boolean} [_raise=true]
+     */
+    reapplyAnnotationFilters(_raise = true) {
+        const selected = this.getSelectedAnnotations?.() || [];
+        let changed = false;
+
+        for (const object of this.canvas?.getObjects?.() || []) {
+            if (!this.isAnnotation(object)) continue;
+            const wasVisible = object.visible !== false;
+            this._applyAnnotationVisibilityState(object);
+            const isVisible = object.visible !== false;
+            changed = changed || wasVisible !== isVisible;
+
+            if (!isVisible && selected.some(sel => sel.internalID === object.internalID)) {
+                this.deselectAnnotation(object, true);
+            }
+        }
+
+        if ((this.isEditing?.() || this.isOngoingEdit?.()) && selected.some(obj => this.module.isAnnotationFilteredOut(obj))) {
+            this.requestEndSelectionEdit();
+        }
+
+        this.canvas.requestRenderAll();
+        if (_raise) {
+            this.raiseEvent('annotation-filter-change', {
+                filters: this.module.getAnnotationFilters(),
+                changed
+            });
         }
     }
 
@@ -1529,7 +1563,9 @@ OSDAnnotations.FabricWrapper = class OSDAnnotationsFabricWrapper extends XOpatVi
         if (!_dangerousSkipHistory && !annotation.layerID) {
             this.upsertBoardItem('annotation', annotation.incrementId, boardIndex);
         }
-        this.selectAnnotation(annotation, true, true);
+        if (annotation.visible !== false) {
+            this.selectAnnotation(annotation, true, true);
+        }
 
         if (_raise) this.raiseEvent('annotation-create', {object: annotation});
         this.canvas.requestRenderAll();
@@ -1568,13 +1604,18 @@ OSDAnnotations.FabricWrapper = class OSDAnnotationsFabricWrapper extends XOpatVi
 
         this.canvas.remove(previous);
         this.canvas.add(next);
+        this._applyAnnotationVisibilityState(next);
 
         if (updateUI) {
             if (!next.layerID) {
                 this.replaceBoardItem('annotation', previous.incrementId, next.incrementId, boardIndex);
             }
 
-            this.selectAnnotation(next, true, true);
+            if (next.visible !== false) {
+                this.selectAnnotation(next, true, true);
+            } else {
+                this.clearAnnotationSelection(true);
+            }
             this.raiseEvent('annotation-replace', { previous, next, boardIndex });
         }
 

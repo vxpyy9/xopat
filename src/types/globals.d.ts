@@ -4,6 +4,10 @@ declare global {
     // Runtime-provided globals available throughout the application
     var $: any;
     var APPLICATION_CONTEXT: ApplicationContext;
+    var addModule: (id: string, moduleClass: new () => IXOpatModuleSingleton) => void;
+    var addPlugin: (id: string, pluginClass: new (id: string) => IXOpatPlugin) => void;
+    var XOpatModuleSingleton: new () => IXOpatModuleSingleton;
+    var XOpatPlugin: new (id: string) => IXOpatPlugin;
     var VIEWER_MANAGER: any;
     var VIEWER: OpenSeadragon.Viewer;
     var USER_INTERFACE: any;
@@ -35,6 +39,8 @@ declare global {
         UTILITIES: XOpatUtilities;
         /** xOpat plugin class constructor, set once loader is initialized */
         XOpatPlugin?: any;
+        /** xOpat module singleton class constructor, set once loader is initialized */
+        XOpatModuleSingleton?: any;
         /** BackgroundConfig class constructor */
         BackgroundConfig: BackgroundConfigConstructor;
         /** HistoryProvider base class */

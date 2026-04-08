@@ -457,16 +457,17 @@ export class AnnotationBoardPanel {
 
     _renderAnnotation(object) {
         const factory = this.context.getAnnotationObjectFactory(object.factoryID);
+        const isFiltered = !!this.context.isAnnotationFilteredOut?.(object);
         const row = document.createElement('div');
         row.id = this.getAnnotationElementId(object.label);
         row.dataset.type = 'annotation';
         row.dataset.id = String(object.incrementId);
-        row.className = 'group/ann flex items-center gap-3 px-2 py-1 hover:bg-base-300/50 cursor-pointer border-l-4 border-transparent history-item-row transition-all';
+        row.className = `group/ann flex items-center gap-3 px-2 py-1 border-l-4 border-transparent history-item-row transition-all ${isFiltered ? 'opacity-45 saturate-50 cursor-not-allowed' : 'hover:bg-base-300/50 cursor-pointer'}`.trim();
+        if (isFiltered) row.setAttribute('aria-disabled', 'true');
 
         const color = this.fabric.getAnnotationColor?.(object) || 'var(--fallback-bc,black)';
         row.style.borderLeftColor = color;
 
-        // We'll use a Drag Handle icon instead of Up/Down arrows to clean up space
         const dragHandle = document.createElement('div');
         dragHandle.className = 'opacity-0 group-hover/ann:opacity-30 cursor-grab active:cursor-grabbing';
         dragHandle.appendChild(faIcon('fa-grip-vertical', 'text-xs'));
@@ -483,19 +484,30 @@ export class AnnotationBoardPanel {
         const title = document.createElement('div');
         title.className = 'text-sm font-medium truncate';
         title.textContent = this._getAnnotationDisplayText(object);
+        if (isFiltered) title.classList.add('line-through');
 
         const subText = document.createElement('div');
         subText.className = 'text-[10px] opacity-50 flex gap-2 items-center';
         const area = factory?.getArea?.(object);
         const time = new Date(object.created).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-        subText.innerHTML = `<span>${time}</span> • <span>${area ? this._formatArea(area) : 'No area'}</span>`;
+        const timeNode = document.createElement('span');
+        timeNode.textContent = time;
+        const areaNode = document.createElement('span');
+        areaNode.textContent = area ? this._formatArea(area) : 'No area';
+        subText.append(timeNode, document.createTextNode(' • '), areaNode);
+        if (isFiltered) {
+            const badge = document.createElement('span');
+            badge.className = 'badge badge-ghost badge-xs';
+            badge.textContent = 'filtered';
+            subText.appendChild(badge);
+        }
 
         content.append(title, subText);
 
         const actions = document.createElement('div');
-        actions.className = 'flex gap-0.5 opacity-0 group-hover/ann:opacity-100';
+        actions.className = `flex gap-0.5 ${isFiltered ? 'opacity-30' : 'opacity-0 group-hover/ann:opacity-100'}`.trim();
 
-        if (factory?.isEditable?.()) {
+        if (!isFiltered && factory?.isEditable?.()) {
             const editBtn = document.createElement('button');
             const isEditingThis = !!(
                 this.context.isEditSelectionModeActive?.() &&
@@ -526,7 +538,9 @@ export class AnnotationBoardPanel {
         row.append(dragHandle, iconBox, content, actions);
 
         const focus = this._getFocusBBox(object, factory);
-        row.addEventListener('click', (e) => this._clickBoardElement(focus, object.incrementId, e));
+        if (!isFiltered) {
+            row.addEventListener('click', (e) => this._clickBoardElement(focus, object.incrementId, e));
+        }
 
         return row;
     }

@@ -47,6 +47,13 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
             if (this._editSelectionSyncDepth > 0) return;
             this._syncEditModeToSelection(e?.viewer, e?.selected || [], e?.deselected || []);
         });
+
+        // TODO: necessary? kinda overkill...
+        // const reapplyFilters = () => this._applyAnnotationFiltersToAllViewers();
+        // this.addFabricHandler('annotation-create', reapplyFilters);
+        // this.addFabricHandler('annotation-replace', reapplyFilters);
+        // this.addFabricHandler('annotation-preset-change', reapplyFilters);
+        // this.addFabricHandler('annotation-edit-end', reapplyFilters);
     }
 
     /**
@@ -840,16 +847,370 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 	}
 
 
-    /**
-     * Check if comments were declared as enabled
-     * @returns {boolean}
-     */
+	/**
+	 * Check if comments were declared as enabled
+	 * @returns {boolean}
+	 */
     getCommentsEnabled() {
         // todo missing set
         return this.commentsEnabled;
     }
 
+    /********************* ANNOTATION FILTERING **********************/
+
+    /**
+     * Returns the currently active annotation filters.
+     * Each filter is normalized into a serializable plain object.
+     * @returns {Array<object>}
+     */
+    getAnnotationFilters() {
+        return $.extend(true, [], this._annotationFilters || []);
+    }
+
+    /**
+     * Replaces the active annotation filters and reapplies visibility on all viewers.
+     * Supported filter types are:
+     *  - `instanceId`: matches visible annotation increment id in `#number` form
+     *  - `author`: matches annotation `author`
+     *  - `presetName`: matches annotation `presetID`
+     *  - `factoryType`: matches annotation `factoryID`
+     *  - `boundingRect`: matches annotations fully contained in the given rectangle
+     * @param {Array<object>} filters
+     * @param {boolean} [_raise=true]
+     * @returns {Array<object>}
+     */
+    setAnnotationFilters(filters = [], _raise = true) {
+        const normalized = Array.isArray(filters)
+            ? filters.map(filter => this._normalizeAnnotationFilter(filter)).filter(Boolean)
+            : [];
+        this._annotationFilters = normalized;
+        this._applyAnnotationFiltersToAllViewers();
+
+        if (_raise) {
+            this.raiseEvent('annotation-filter-change', {
+                filters: this.getAnnotationFilters()
+            });
+        }
+        return this.getAnnotationFilters();
+    }
+
+    /**
+     * Appends one annotation filter to the active filter set.
+     * @param {object} filter
+     * @param {boolean} [_raise=true]
+     * @returns {Array<object>}
+     */
+    addAnnotationFilter(filter, _raise = true) {
+        const next = this.getAnnotationFilters();
+        const normalized = this._normalizeAnnotationFilter(filter);
+        if (!normalized) return next;
+        next.push(normalized);
+        return this.setAnnotationFilters(next, _raise);
+    }
+
+    /**
+     * Removes one active annotation filter by its normalized id.
+     * @param {string} filterId
+     * @param {boolean} [_raise=true]
+     * @returns {Array<object>}
+     */
+    removeAnnotationFilter(filterId, _raise = true) {
+        const next = this.getAnnotationFilters().filter(filter => filter?.id !== filterId);
+        return this.setAnnotationFilters(next, _raise);
+    }
+
+    /**
+     * Clears all active annotation filters.
+     * @param {boolean} [_raise=true]
+     * @returns {Array<object>}
+     */
+    clearAnnotationFilters(_raise = true) {
+        return this.setAnnotationFilters([], _raise);
+    }
+
+    /**
+     * Returns true when the given full annotation passes all active filters.
+     * Helper annotations are always considered visible.
+     * @param {fabric.Object} annotation
+     * @returns {boolean}
+     */
+    annotationMatchesFilters(annotation) {
+        if (!this.isAnnotation(annotation)) return true;
+
+        const filters = this._annotationFilters || [];
+        if (!filters.length) return true;
+
+        return filters.every(filter => this._annotationMatchesFilter(annotation, filter));
+    }
+
+    /**
+     * Returns true when the given full annotation is hidden by the active filter set.
+     * @param {fabric.Object} annotation
+     * @returns {boolean}
+     */
+    isAnnotationFilteredOut(annotation) {
+        return this.isAnnotation(annotation) && !this.annotationMatchesFilters(annotation);
+    }
+
+    /**
+     * Returns currently available filter values discovered from existing full annotations.
+     * The return object contains arrays for `instanceId`, `author`, `presetName`, and `factoryType`.
+     * Each item contains `{ value, label }`.
+     * @param {ViewerLikeItem} [viewerOrId]
+     * @returns {{instanceId: Array<{value:string,label:string}>, author: Array<{value:string,label:string}>, presetName: Array<{value:string,label:string}>, factoryType: Array<{value:string,label:string}>}}
+     */
+    getAvailableAnnotationFilterValues(viewerOrId = undefined) {
+        const instances = this._resolveFilterTargetInstances(viewerOrId);
+        const values = {
+            instanceId: [],
+            author: [],
+            presetName: [],
+            factoryType: [],
+        };
+        const buckets = {
+            instanceId: new Map(),
+            author: new Map(),
+            presetName: new Map(),
+            factoryType: new Map(),
+        };
+
+        const add = (type, value, label) => {
+            const normalizedValue = value === undefined || value === null ? '' : String(value);
+            if (!normalizedValue) return;
+            if (!buckets[type].has(normalizedValue)) {
+                buckets[type].set(normalizedValue, {
+                    value: normalizedValue,
+                    label: label ?? normalizedValue
+                });
+            }
+        };
+
+        for (const instance of instances) {
+            for (const object of instance.canvas?.getObjects?.() || []) {
+                if (!instance.isAnnotation(object)) continue;
+
+                const instanceValue = object.incrementId !== undefined ? `#${object.incrementId}` : '';
+                add(
+                    'instanceId',
+                    instanceValue,
+                    `${this.getAnnotationFilterDisplayName(object)} · ${instanceValue}`.trim()
+                );
+                add('author', object.author, object.author || 'Unknown');
+
+                const preset = object.presetID ? this.presets.get(object.presetID) : null;
+                add(
+                    'presetName',
+                    object.presetID,
+                    preset?.meta?.category?.value || preset?.presetID || object.presetID
+                );
+
+                const factory = this.getAnnotationObjectFactory(object.factoryID);
+                add(
+                    'factoryType',
+                    object.factoryID,
+                    factory?.title?.() || object.factoryID
+                );
+            }
+        }
+
+        for (const key of Object.keys(values)) {
+            values[key] = [...buckets[key].values()].sort((a, b) => String(a.label).localeCompare(String(b.label)));
+        }
+        return values;
+    }
+
+    /**
+     * Returns a user-facing label for one active annotation filter.
+     * @param {object} filter
+     * @returns {{id:string,text:string}|null}
+     */
+    describeAnnotationFilter(filter) {
+        const normalized = this._normalizeAnnotationFilter(filter);
+        if (!normalized) return null;
+
+        const available = this.getAvailableAnnotationFilterValues();
+        const labels = normalized.values?.map(value => {
+            const candidate = available[normalized.type]?.find(item => item.value === value);
+            return candidate?.label || value;
+        }) || [];
+
+        switch (normalized.type) {
+            case 'instanceId':
+                return { id: normalized.id, text: `ID: ${labels.join(', ')}` };
+            case 'author':
+                return { id: normalized.id, text: `Author: ${labels.join(', ')}` };
+            case 'presetName':
+                return { id: normalized.id, text: `Preset: ${labels.join(', ')}` };
+            case 'factoryType':
+                return { id: normalized.id, text: `Type: ${labels.join(', ')}` };
+            case 'boundingRect':
+                return {
+                    id: normalized.id,
+                    text: `Rect: ${normalized.rect.x}, ${normalized.rect.y}, ${normalized.rect.width}, ${normalized.rect.height}`
+                };
+            default:
+                return { id: normalized.id, text: normalized.id };
+        }
+    }
+
 	/********************* AUTHOR CONFIGURATION **********************/
+
+    /**
+     * Resolves filter target viewer wrappers.
+     * @param {ViewerLikeItem} [viewerOrId]
+     * @returns {OSDAnnotations.FabricWrapper[]}
+     * @private
+     */
+    _resolveFilterTargetInstances(viewerOrId = undefined) {
+        if (!viewerOrId) {
+            return OSDAnnotations.FabricWrapper.instances?.() || [];
+        }
+
+        const instance = OSDAnnotations.FabricWrapper.instance(viewerOrId);
+        return instance ? [instance] : [];
+    }
+
+    /**
+     * Normalizes a raw annotation filter description.
+     * @param {object} filter
+     * @returns {object|null}
+     * @private
+     */
+    _normalizeAnnotationFilter(filter) {
+        if (!filter || typeof filter !== 'object') return null;
+
+        const type = String(filter.type || '').trim();
+        if (!['instanceId', 'author', 'presetName', 'factoryType', 'boundingRect'].includes(type)) {
+            return null;
+        }
+
+        if (type === 'boundingRect') {
+            const rect = filter.rect || filter.value || {};
+            const x = Number(rect.x);
+            const y = Number(rect.y);
+            const width = Number(rect.width);
+            const height = Number(rect.height);
+            if (![x, y, width, height].every(Number.isFinite) || width < 0 || height < 0) {
+                return null;
+            }
+            return {
+                id: String(filter.id || `${type}:${x}:${y}:${width}:${height}`),
+                type,
+                rect: { x, y, width, height }
+            };
+        }
+
+        const values = Array.isArray(filter.values) ? filter.values : [filter.value];
+        const normalizedValues = values
+            .map(value => value === undefined || value === null ? '' : String(value).trim())
+            .filter(Boolean);
+
+        if (!normalizedValues.length) return null;
+
+        return {
+            id: String(filter.id || `${type}:${normalizedValues.join('|')}`),
+            type,
+            values: [...new Set(normalizedValues)]
+        };
+    }
+
+    /**
+     * Tests one annotation against one normalized filter.
+     * @param {fabric.Object} annotation
+     * @param {object} filter
+     * @returns {boolean}
+     * @private
+     */
+    _annotationMatchesFilter(annotation, filter) {
+        if (!filter) return true;
+
+        switch (filter.type) {
+            case 'instanceId':
+                return filter.values.includes(annotation.incrementId !== undefined ? `#${annotation.incrementId}` : '');
+            case 'author':
+                return filter.values.includes(String(annotation.author || ''));
+            case 'presetName':
+                return filter.values.includes(String(annotation.presetID || ''));
+            case 'factoryType':
+                return filter.values.includes(String(annotation.factoryID || ''));
+            case 'boundingRect': {
+                const bbox = this._getAnnotationFilterRect(annotation);
+                if (!bbox) return false;
+                return bbox.x >= filter.rect.x &&
+                    bbox.y >= filter.rect.y &&
+                    bbox.x + bbox.width <= filter.rect.x + filter.rect.width &&
+                    bbox.y + bbox.height <= filter.rect.y + filter.rect.height;
+            }
+            default:
+                return true;
+        }
+    }
+
+    /**
+     * Resolves a bounding rectangle for filtering purposes.
+     * @param {fabric.Object} annotation
+     * @returns {{x:number,y:number,width:number,height:number}|null}
+     * @private
+     */
+    _getAnnotationFilterRect(annotation) {
+        if (!annotation) return null;
+        try {
+            const factory = this.getAnnotationObjectFactory(annotation.factoryID);
+            if (factory?.getObjectFocusZone) {
+                const zone = factory.getObjectFocusZone(annotation);
+                if (zone) {
+                    return {
+                        x: Number(zone.left ?? zone.x ?? 0),
+                        y: Number(zone.top ?? zone.y ?? 0),
+                        width: Number(zone.width ?? 0),
+                        height: Number(zone.height ?? 0)
+                    };
+                }
+            }
+
+            const rect = annotation.getBoundingRect?.(true, true);
+            if (!rect) return null;
+            return {
+                x: Number(rect.left ?? rect.x ?? 0),
+                y: Number(rect.top ?? rect.y ?? 0),
+                width: Number(rect.width ?? 0),
+                height: Number(rect.height ?? 0)
+            };
+        } catch (error) {
+            console.warn('Failed to resolve annotation bounding rect for filtering.', error);
+            return null;
+        }
+    }
+
+    /**
+     * Reapplies the active filter set to every viewer-local annotation canvas.
+     * @private
+     */
+    _applyAnnotationFiltersToAllViewers() {
+        for (const instance of this._resolveFilterTargetInstances()) {
+            instance.reapplyAnnotationFilters?.(false);
+        }
+    }
+
+    /**
+     * Returns the annotation display name as seen in annotation lists.
+     * @param {fabric.Object} annotation
+     * @returns {string}
+     */
+    getAnnotationFilterDisplayName(annotation) {
+        if (!annotation) return 'Annotation';
+
+        const preset = annotation.presetID ? this.presets.get(annotation.presetID) : null;
+        const category = preset?.meta?.category?.value;
+        const factory = this.getAnnotationObjectFactory(annotation.factoryID);
+        const fallback = factory?.getDescription?.(annotation)
+            || factory?.title?.()
+            || 'Annotation';
+        const label = annotation.label !== undefined && annotation.label !== null
+            ? String(annotation.label)
+            : '';
+        return `${category || fallback} ${label}`.trim();
+    }
 
 	/**
 	 * Set a callback to get author ID in form matching XOpatUser.id
@@ -1056,6 +1417,7 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 		this._idCounter = 0;
         this._annotationAutoIncrement = 0;
         this._annotationLabelIncrement = 0;
+        this._annotationFilters = [];
 		this._storeCacheSnapshots = this.getStaticMeta("storeCacheSnapshots", false);
 		this._exportPrivateAnnotations = this.getStaticMeta("exportPrivate", false); // todo make this more configurable
 		this._provideDefaultPresets = this.getStaticMeta("provideDefaultPresets", true);
