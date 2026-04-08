@@ -2887,7 +2887,7 @@ form.submit();
             this._singletonsKey = Symbol('singletons');
 
             // layout container
-            this.layout = new UI.StretchGrid({ cols: 2, gap: "2px" });
+            this.layout = new UI.StretchGrid({ cols: 1, gap: "2px" });
             this.layout.attachTo(document.getElementById("osd")); // attach once
 
             // add initial viewer

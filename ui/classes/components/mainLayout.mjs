@@ -993,7 +993,7 @@ export class MainLayout extends BaseComponent {
 
         this._toolbarHostBarEl = document.createElement("div");
         this._toolbarHostBarEl.id = `${this.id}-toolbar-host-bar`;
-        this._toolbarHostBarEl.className = "items-center gap-1 glass border border-base-300 rounded-md shadow-sm px-1 py-1 pointer-events-auto max-w-full w-full justify-between";
+        this._toolbarHostBarEl.className = "items-center gap-1 glass border border-base-300 rounded-md shadow-sm px-1 py-1 max-w-full w-full justify-between";
 
         this._toolbarSwitcherWrap = document.createElement("div");
         this._toolbarSwitcherWrap.appendChild(this._toolbarDropdown.create());
@@ -1317,11 +1317,14 @@ origin-center
 
         requestAnimationFrame(() => {
             const currentActive = VM?.get?.() || activeViewer;
-            try {
-                currentActive?.viewport?.resize?.();
-                currentActive?.forceRedraw?.();
-            } catch (e) {
-                // no-op
+            if (currentActive) {
+                try {
+                    const container = currentActive.container;
+                    //currentActive.viewport.resize(new OpenSeadragon.Point(container.clientWidth || 1, container.clientHeight || 1));
+                    currentActive.forceRedraw();
+                } catch (e) {
+                    // no-op
+                }
             }
         });
     }

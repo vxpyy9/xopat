@@ -21,7 +21,7 @@ addPlugin("chat-cerit-io", class extends XOpatPlugin {
         });
 
         try {
-            await xmodules["vercel-ai-chat-sdk"]?.ChatModule.instance().refreshProviders();
+            await xmodules["vercel-ai-chat-sdk"]?.instance().refreshProviders();
         } catch (e) {
             console.error(e);
         }

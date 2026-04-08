@@ -95,6 +95,7 @@ export class FullscreenMenu extends BaseComponent{
         const overlay = document.getElementById("overlay");
 
         if (overlay.classList.contains("hidden")) {
+            // todo do not touch directly, use API of relevant services
             document.getElementById("overlay").classList.toggle("hidden");
             document.getElementById("toolbars-container").style.display = "none";
         }
@@ -107,6 +108,7 @@ export class FullscreenMenu extends BaseComponent{
                 continue;
             }
             else if(tab.id == id && tab.classMap.display == "") {
+                // todo do not touch directly, use API of relevant services
                 document.getElementById("overlay").classList.toggle("hidden");
                 document.getElementById("toolbars-container").style.display = "";
             }

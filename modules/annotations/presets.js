@@ -479,7 +479,7 @@ OSDAnnotations.PresetManager = class {
             }
         }
 
-        if (typeof presets === 'string' && presets.length > 10) {
+        if (typeof presets === 'string') {
             presets = JSON.parse(presets);
         }
 

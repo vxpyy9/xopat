@@ -23,11 +23,6 @@ export class MobileBottomBar {
         }
 
         this.root = this._build();
-
-        if (!document.getElementById("toolbars-container")) {
-            const toolbarsContainer = new Div({ id:"toolbars-container", class:"w-full", style:"pointer-events: none; position: absolute; top: 0; left: 0; z-index: 980;" });
-            toolbarsContainer.attachTo(this.context);
-        }
         this.context.appendChild(this.root);
         this.context.style.height = "auto";
 
@@ -201,7 +196,7 @@ export class MobileBottomBar {
         const isMobile = this._isMobileWidth();
 
         if (isMobile) {
-            window.LAYOUT?.closeGlobalMenuMobile?.();
+            window.LAYOUT?.closeGlobalMenuMobile();
             return;
         }
 
@@ -209,8 +204,8 @@ export class MobileBottomBar {
         if (toolbars) toolbars.style.display = "none";
         this._setToolbarsVisible(true);
 
-        if (window.LAYOUT?.isOpened?.()) {
-            window.LAYOUT.hideGlobalMenu?.();
+        if (window.LAYOUT?.isOpened()) {
+            window.LAYOUT.hideGlobalMenu();
         }
     }
 
@@ -425,7 +420,6 @@ export class MobileBottomBar {
 
         toolbars.style.display = visible ? "" : "none";
         toolbars.style.visibility = visible ? "visible" : "hidden";
-        toolbars.style.pointerEvents = visible ? "auto" : "none";
     }
 
     _hideViewerMenu(menu) {

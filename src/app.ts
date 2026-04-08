@@ -281,7 +281,7 @@ export function initXOpat(PLUGINS: Record<string, XOpatElementItem>, MODULES: Re
                 (defaultValue === undefined ? self.config.defaultParams[name] : defaultValue);
             if (value === "false") return false;
             if (value === "true") return true;
-            if (typeof value === "string") {
+            if (parse && typeof value === "string") {
                 try {
                     return JSON.parse(value);
                 } catch (e) {
@@ -464,7 +464,9 @@ export function initXOpat(PLUGINS: Record<string, XOpatElementItem>, MODULES: Re
         id: "viewer-container",
         position: "right",
         initialWidth: 360,
-        collapseBreakpointPx: APPLICATION_CONTEXT.getOption("maxMobileWidthPx", null),
+        collapseBreakpointPx: APPLICATION_CONTEXT.getOption("maxMobileWidthPx", undefined, false, true),
+        toolbarEmbeddingWide: false,
+        toolbarEmbeddingPosition: "below",
     });
     // Attach once (replaces your static HTML wrapper)
     (window as any).LAYOUT.attachTo(document.getElementById("middle-container"));
@@ -1234,6 +1236,202 @@ export function initXOpat(PLUGINS: Record<string, XOpatElementItem>, MODULES: Re
     };
 
 
+    const cloneRuntimeState = <T>(value: T): T => {
+        if (value === undefined || value === null) {
+            return value;
+        }
+
+        try {
+            return JSON.parse(safeStringify(value));
+        } catch (e) {
+            try {
+                return JSON.parse(JSON.stringify(value));
+            } catch (e2) {
+                return value;
+            }
+        }
+    };
+
+    const normalizeSelectionValue = (value: any): Array<number | undefined> | undefined => {
+        if (value == null) {
+            return undefined;
+        }
+        if (Array.isArray(value)) {
+            return value.map((entry: any) => Number.isInteger(entry) ? entry : undefined);
+        }
+        return Number.isInteger(value) ? [value] : undefined;
+    };
+
+    const getRenderingCapability = (force = false) => {
+        const appContext: any = APPLICATION_CONTEXT as any;
+        if (!force && appContext.__renderingCapability) {
+            return appContext.__renderingCapability;
+        }
+
+        const rendererClass = (window.OpenSeadragon as any)?.FlexRenderer;
+        const fallback = {
+            ok: false,
+            error: "FlexRenderer runtime self-test is not available.",
+        };
+
+        const capability = rendererClass && typeof rendererClass.ensureRuntimeSupport === "function"
+            ? rendererClass.ensureRuntimeSupport({
+                webGLPreferredVersion: APPLICATION_CONTEXT.getOption("webGlPreferredVersion"),
+                debug: !!APPLICATION_CONTEXT.getOption("webglDebugMode"),
+                force,
+                throwOnFailure: false,
+            })
+            : fallback;
+
+        appContext.__renderingCapability = capability;
+        return capability;
+    };
+
+    const warnRenderingCapability = (message: string) => {
+        const appContext: any = APPLICATION_CONTEXT as any;
+        if (appContext.__renderingCapabilityWarning === message) {
+            return;
+        }
+        appContext.__renderingCapabilityWarning = message;
+        console.warn(message);
+        if (typeof Dialogs !== "undefined" && Dialogs?.show) {
+            Dialogs.show(message, 12000, Dialogs.MSG_WARN);
+        }
+    };
+
+    const clearVisualizationCaches = (shaderConfigMap: Record<string, any>) => {
+        let clearedAny = false;
+        for (const shaderId in shaderConfigMap) {
+            if (!Object.prototype.hasOwnProperty.call(shaderConfigMap, shaderId)) {
+                continue;
+            }
+            const config = shaderConfigMap[shaderId];
+            if (!config || typeof config !== "object") {
+                continue;
+            }
+            if (config.cache && typeof config.cache === "object" && Object.keys(config.cache).length > 0) {
+                clearedAny = true;
+            }
+            if (config._cacheApplied) {
+                clearedAny = true;
+            }
+            config.cache = {};
+            delete config._cacheApplied;
+        }
+        return clearedAny;
+    };
+
+    const validateVisualizationCollection = (
+        visualizations: VisualizationItem[] = [],
+        data: DataSpecification[] = [],
+    ) => {
+        const rendererClass: any = (window.OpenSeadragon as any)?.FlexRenderer;
+        const shaderMediator = rendererClass?.ShaderMediator;
+        const sanitizedVisualizations: VisualizationItem[] = [];
+        const issues: string[] = [];
+
+        const sanitizeKey = (value: any, fallback: string) => {
+            const raw = typeof value === "string" && value ? value : fallback;
+            if (rendererClass && typeof rendererClass.sanitizeKey === "function") {
+                try {
+                    return rendererClass.sanitizeKey(String(raw));
+                } catch (e) {
+                    return fallback;
+                }
+            }
+            return String(raw);
+        };
+
+        for (let vizIndex = 0; vizIndex < visualizations.length; vizIndex++) {
+            const sourceVisualization: any = visualizations[vizIndex];
+            if (!sourceVisualization || typeof sourceVisualization !== "object") {
+                issues.push(`Visualization #${vizIndex} is not an object.`);
+                continue;
+            }
+
+            const visualization: any = $.extend(true, {}, sourceVisualization);
+            if (typeof visualization.name !== "string" || !visualization.name) {
+                visualization.name = $.t('main.shaders.defaultTitle');
+            }
+
+            const sourceShaders = visualization.shaders && typeof visualization.shaders === "object" && !Array.isArray(visualization.shaders)
+                ? visualization.shaders
+                : {};
+            if (sourceShaders !== visualization.shaders) {
+                issues.push(`Visualization #${vizIndex} had an invalid shaders definition and was reset.`);
+            }
+
+            const sanitizedShaders: Record<string, any> = {};
+            const seenIds = new Set<string>();
+            let layerIndex = 0;
+            for (const shaderKey in sourceShaders) {
+                if (!Object.prototype.hasOwnProperty.call(sourceShaders, shaderKey)) {
+                    continue;
+                }
+                const sourceLayer: any = sourceShaders[shaderKey];
+                if (!sourceLayer || typeof sourceLayer !== "object") {
+                    issues.push(`Visualization #${vizIndex} layer '${shaderKey}' is not an object.`);
+                    continue;
+                }
+
+                const layer: any = $.extend(true, {}, sourceLayer);
+                if (typeof layer.type !== "string" || !layer.type) {
+                    issues.push(`Visualization #${vizIndex} layer '${shaderKey}' is missing a shader type.`);
+                    continue;
+                }
+                if (shaderMediator && typeof shaderMediator.getClass === "function" && !shaderMediator.getClass(layer.type)) {
+                    issues.push(`Visualization #${vizIndex} layer '${shaderKey}' uses unknown shader type '${layer.type}'.`);
+                    continue;
+                }
+
+                const layerId = sanitizeKey(layer.id || shaderKey || `layer_${vizIndex}_${layerIndex}`, `layer_${vizIndex}_${layerIndex}`);
+                if (seenIds.has(layerId)) {
+                    issues.push(`Visualization #${vizIndex} defines duplicate layer id '${layerId}'.`);
+                    continue;
+                }
+                seenIds.add(layerId);
+
+                if (typeof layer.name !== "string" || !layer.name) {
+                    layer.name = shaderKey || layer.type;
+                }
+
+                if (layer.dataReferences !== undefined) {
+                    if (!Array.isArray(layer.dataReferences)) {
+                        issues.push(`Visualization #${vizIndex} layer '${layerId}' has invalid dataReferences.`);
+                        continue;
+                    }
+
+                    const refs = layer.dataReferences.filter((entry: any) => Number.isInteger(entry) && entry >= 0);
+                    if (refs.length !== layer.dataReferences.length) {
+                        issues.push(`Visualization #${vizIndex} layer '${layerId}' had non-integer dataReferences.`);
+                    }
+                    if (refs.some((entry: number) => entry >= data.length)) {
+                        issues.push(`Visualization #${vizIndex} layer '${layerId}' references unavailable data.`);
+                        continue;
+                    }
+                    layer.dataReferences = refs;
+                }
+
+                if (Array.isArray(layer.tiledImages)) {
+                    layer.tiledImages = layer.tiledImages.filter((entry: any) => Number.isInteger(entry) && entry >= 0);
+                }
+
+                layer.id = layerId;
+                sanitizedShaders[layerId] = layer;
+                layerIndex++;
+            }
+
+            visualization.shaders = sanitizedShaders;
+            sanitizedVisualizations.push(visualization as VisualizationItem);
+        }
+
+        return {
+            visualizations: sanitizedVisualizations,
+            issues,
+            valid: issues.length === 0,
+        };
+    };
+
     /**
      * TODO get rid completely of data array, keep it only on the outer interface level
      *
@@ -1255,6 +1453,9 @@ export function initXOpat(PLUGINS: Record<string, XOpatElementItem>, MODULES: Re
             preserveHistoryOnBackgroundChange?: boolean,
             warnOnHistoryBoundary?: boolean,
             historyLabel?: string,
+            strictVisualization?: boolean,
+            skipVisualizationCapabilityCheck?: boolean,
+            suppressDialogsOnVisualizationFailure?: boolean,
         } = {}
     ) {
         // TODO: consider moving these functions to utilities and using them for serialization
@@ -1373,6 +1574,23 @@ export function initXOpat(PLUGINS: Record<string, XOpatElementItem>, MODULES: Re
         if (!Array.isArray(config.data)) config.data = [];
         if (!Array.isArray(config.background)) config.background = [];
         if (!Array.isArray(config.visualizations)) config.visualizations = [];
+
+        const strictVisualization = !!opts.strictVisualization;
+        const visualizationValidation = validateVisualizationCollection(config.visualizations as any, config.data as any);
+        if (visualizationValidation.issues.length > 0) {
+            console.warn("Visualization validation issues detected.", visualizationValidation.issues);
+            if (strictVisualization) {
+                USER_INTERFACE.Loading.show(false);
+                throw new Error("Visualization validation failed: " + visualizationValidation.issues.join(" | "));
+            }
+        }
+        config.visualizations = visualizationValidation.visualizations as any;
+
+        const renderingCapability = opts.skipVisualizationCapabilityCheck ? ((APPLICATION_CONTEXT as any).__renderingCapability || { ok: true }) : getRenderingCapability(false);
+        if (strictVisualization && Array.isArray(config.visualizations) && config.visualizations.length > 0 && !renderingCapability.ok) {
+            USER_INTERFACE.Loading.show(false);
+            throw new Error(renderingCapability.error || "Visualization rendering is unavailable on this device.");
+        }
 
         if (Array.isArray(config.background)) {
             // always call from(...) it will remap data references to indexes
@@ -1668,6 +1886,12 @@ export function initXOpat(PLUGINS: Record<string, XOpatElementItem>, MODULES: Re
         const openIntoViewer = async (entry: any, viewerIndex: number) => {
             const viewer = VM.viewers[viewerIndex];
             const canSurgicallyDiff = viewer.isOpen() && viewer.world.getItemCount() > 0;
+            const viewerSupportsFlexRendering = !!(
+                viewer?.drawer &&
+                typeof viewer.drawer.getType === "function" &&
+                viewer.drawer.getType() === "flex-renderer" &&
+                typeof viewer.drawer.overrideConfigureAll === "function"
+            );
 
             // (A) Identify Backgrounds
             const openedBase: BackgroundConfig[] = [];
@@ -1679,8 +1903,11 @@ export function initXOpat(PLUGINS: Record<string, XOpatElementItem>, MODULES: Re
                 ? activeViz[viewerIndex]
                 : (Number.isInteger(activeViz) ? (activeViz as number) : undefined);
 
-            const renderingWithWebGL = Array.isArray(vis) && vis.length > 0 && Number.isInteger(visIndexForThis);
+            const renderingWithWebGL = viewerSupportsFlexRendering && renderingCapability.ok && Array.isArray(vis) && vis.length > 0 && Number.isInteger(visIndexForThis);
             const activeV = renderingWithWebGL ? vis[visIndexForThis as number] : undefined;
+            if (!renderingWithWebGL && Array.isArray(vis) && vis.length > 0 && Number.isInteger(visIndexForThis) && (!viewerSupportsFlexRendering || !renderingCapability.ok)) {
+                warnRenderingCapability(renderingCapability.error || "Visualization rendering is unavailable; opening image data without visualization shaders.");
+            }
 
             // (C) Build base tileSource list and data mapping
             const toOpen: any[] = [];
@@ -1809,12 +2036,6 @@ export function initXOpat(PLUGINS: Record<string, XOpatElementItem>, MODULES: Re
                 VM._resetViewer(viewerIndex);
             }
 
-            // Configure the drawer
-            UTILITIES.applyStoredVisualizationSnapshot(renderOutput);
-            if (viewer.drawer?.overrideConfigureAll) {
-                viewer.drawer.overrideConfigureAll(renderOutput);
-            }
-
             // (E) Layer Synchronization + data mapping for openTile
             const ctx = {
                 bgIndexForItem: (i: number) => entry.bgIndices[0],
@@ -1873,6 +2094,54 @@ export function initXOpat(PLUGINS: Record<string, XOpatElementItem>, MODULES: Re
                 }
             }
 
+            const applyRendererConfiguration = async () => {
+                if (!viewerSupportsFlexRendering || !viewer.drawer?.overrideConfigureAll) {
+                    return false;
+                }
+
+                if (!Object.keys(renderOutput).length) {
+                    await viewer.drawer.overrideConfigureAll(undefined);
+                    return false;
+                }
+
+                const attemptApply = async () => {
+                    await viewer.drawer.overrideConfigureAll(renderOutput);
+                    return true;
+                };
+
+                UTILITIES.applyStoredVisualizationSnapshot(renderOutput);
+                try {
+                    return await attemptApply();
+                } catch (error) {
+                    console.warn("Renderer configuration failed, retrying without cached shader state.", error);
+                    if (!clearVisualizationCaches(renderOutput)) {
+                        throw error;
+                    }
+                    return await attemptApply();
+                }
+            };
+
+            if (viewerSupportsFlexRendering) {
+                try {
+                    await applyRendererConfiguration();
+                } catch (error) {
+                    try {
+                        await viewer.drawer.overrideConfigureAll(undefined);
+                    } catch (resetError) {
+                        console.warn("Failed to reset renderer after configuration failure.", resetError);
+                    }
+
+                    if (strictVisualization) {
+                        throw error;
+                    }
+
+                    console.error("Visualization renderer configuration failed.", error);
+                    if (!opts.suppressDialogsOnVisualizationFailure) {
+                        Dialogs.show($.t("error.slide.failed"), 15000, Dialogs.MSG_WARN);
+                    }
+                }
+            }
+
             // Only fire full re-init events if it wasn't a surgical update
             if (!canSurgicallyDiff || viewer.world.getItemCount() < 1) {
                 handleSyntheticOpenEvent(viewer, successOpened, toOpen.length);
@@ -1892,13 +2161,19 @@ export function initXOpat(PLUGINS: Record<string, XOpatElementItem>, MODULES: Re
             8000
         );
 
+        let openSucceeded = true;
         await Promise.allSettled(bgPlan.map(openIntoViewer)).then(e => {
+            let hadRejectedOpen = false;
             for (let promise of e) {
                 if (promise.status === "rejected") {
+                    hadRejectedOpen = true;
                     // todo how to deal with this within UI?
                     console.error("Failed to open viewer item", promise.reason);
                     Dialogs.show($.t("error.slide.failed"), 15000, Dialogs.MSG_WARN);
                 }
+            }
+            if (hadRejectedOpen && strictVisualization) {
+                throw new Error("Failed to apply one or more visualization updates.");
             }
 
             clearTimeout(loadTooLongTimeout);
@@ -1951,12 +2226,16 @@ export function initXOpat(PLUGINS: Record<string, XOpatElementItem>, MODULES: Re
             //todo make sure bypassCache and bypassCookies is set to true if this option is true - temporarily
             APPLICATION_CONTEXT.setOption("bypassCacheLoadTime", false);
         }).catch(e => {
+            openSucceeded = false;
             clearTimeout(loadTooLongTimeout);
             console.error("Failed to open viewer items", e);
             USER_INTERFACE.Loading.show(false);
             Dialogs.show($.t("error.slide.failed"), 15000, Dialogs.MSG_ERROR);
+            if (strictVisualization) {
+                throw e;
+            }
         });
-        return true;
+        return openSucceeded;
     };
 
     function checkLocalState() {
@@ -1992,24 +2271,52 @@ export function initXOpat(PLUGINS: Record<string, XOpatElementItem>, MODULES: Re
             throw new Error("Visualizations must be an array.");
         }
 
-        const currentData = [...this.config.data];
+        const previousData = cloneRuntimeState(Array.isArray(this.config.data) ? this.config.data : []);
+        const previousVisualizations = cloneRuntimeState(Array.isArray(this.config.visualizations) ? this.config.visualizations : []);
+        const previousActiveViz = cloneRuntimeState(normalizeSelectionValue(this.getOption("activeVisualizationIndex", undefined, true, true)));
+
+        const currentData = [...previousData];
         if (newData.length > 0) {
             currentData.push(...newData);
         }
-
 
         let vizSpec = activeVizIndex;
         if (vizSpec === undefined) {
             vizSpec = this.getOption("activeVisualizationIndex", 0, true, true);
         }
 
-        return await this.openViewerWith(
-            currentData,
-            undefined,
-            visualizations,
-            undefined,
-            vizSpec
-        );
+        try {
+            return await this.openViewerWith(
+                currentData,
+                undefined,
+                visualizations,
+                undefined,
+                vizSpec,
+                {
+                    strictVisualization: true,
+                }
+            );
+        } catch (error) {
+            try {
+                await this.openViewerWith(
+                    previousData,
+                    undefined,
+                    previousVisualizations,
+                    undefined,
+                    previousActiveViz,
+                    {
+                        historyMode: "skip",
+                        fromHistory: true,
+                        strictVisualization: false,
+                        skipVisualizationCapabilityCheck: true,
+                        suppressDialogsOnVisualizationFailure: true,
+                    }
+                );
+            } catch (restoreError) {
+                console.error("Failed to restore visualization state after a rejected update.", restoreError);
+            }
+            throw error;
+        }
     };
 
     // Refresh Page & Storage state are defined here since we have reference to the incoming config
