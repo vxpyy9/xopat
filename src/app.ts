@@ -1007,11 +1007,6 @@ export function initXOpat(PLUGINS: Record<string, XOpatElementItem>, MODULES: Re
             console.error(e);
         }
 
-        if (runLoader) {
-            runLoader();
-            runLoader = null;
-        }
-
         if (APPLICATION_CONTEXT.config.visualizations.length > 0) {
             viewer.raiseEvent('visualization-ready', { viewer });
         }
@@ -2172,6 +2167,10 @@ export function initXOpat(PLUGINS: Record<string, XOpatElementItem>, MODULES: Re
                     Dialogs.show($.t("error.slide.failed"), 15000, Dialogs.MSG_WARN);
                 }
             }
+
+            // Initialize plugins now
+            runLoader();
+
             if (hadRejectedOpen && strictVisualization) {
                 throw new Error("Failed to apply one or more visualization updates.");
             }

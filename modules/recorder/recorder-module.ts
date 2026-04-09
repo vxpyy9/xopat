@@ -4,11 +4,35 @@
 
 type RecorderManagedViewer = OpenSeadragon.Viewer & {
     tools?: RecorderViewerTools;
-    bridge?: RecorderViewerBridge;
 };
 
 function cloneRecord<T extends Record<string, unknown>>(value: T): T {
     return $.extend(true, {}, value) as T;
+}
+
+function cloneValue<T>(value: T): T {
+    if (Array.isArray(value)) {
+        return $.extend(true, [], value) as T;
+    }
+    if (value && typeof value === "object") {
+        return $.extend(true, {}, value) as T;
+    }
+    return value;
+}
+
+function getViewerContextMeta(viewer: RecorderManagedViewer | undefined): { key?: string; title?: string } {
+    if (!viewer) return {};
+    const context = (UTILITIES as typeof UTILITIES & {
+        getViewerIOContext?: (viewerOrUniqueId: OpenSeadragon.Viewer | UniqueViewerId, stripSuffix?: boolean) => {
+            uniqueId?: string;
+            title?: string;
+            fileName?: string;
+        } | undefined;
+    }).getViewerIOContext?.(viewer, true);
+    return {
+        key: context?.title || context?.fileName || context?.uniqueId,
+        title: context?.title || context?.fileName,
+    };
 }
 
 class Recorder extends XOpatModuleSingleton implements RecorderModule {
@@ -39,6 +63,7 @@ class Recorder extends XOpatModuleSingleton implements RecorderModule {
             captureViewport: true,
             captureScreen: false,
             playbackAnnotationFilters: null,
+            playbackVisualizationSnapshots: {},
         };
     }
 
@@ -65,6 +90,7 @@ class Recorder extends XOpatModuleSingleton implements RecorderModule {
             console.warn("Recorder.create() skipped: no viewer is available for recording.", { viewerId });
             return false;
         }
+        const viewerContext = getViewerContextMeta(viewer);
 
         const step: RecorderSnapshotStep = {
             id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
@@ -80,6 +106,8 @@ class Recorder extends XOpatModuleSingleton implements RecorderModule {
             visualization: this._getVisualizationSnapshot(viewer, state.captureVisualization),
             annotationFilters: this._getAnnotationFiltersSnapshot(),
             viewerId: viewer.uniqueId || viewerId,
+            viewerContextKey: viewerContext.key,
+            viewerTitle: viewerContext.title,
             screenShot: state.captureScreen ? viewer.tools?.screenshot(true, { x: 120, y: 120 }) : undefined,
         };
 
@@ -103,6 +131,7 @@ class Recorder extends XOpatModuleSingleton implements RecorderModule {
             console.warn("Recorder.createNavigation() skipped: not enough navigation samples.", { viewerId, sampleCount: samples.length });
             return false;
         }
+        const viewerContext = getViewerContextMeta(viewer);
 
         const normalizedSamples = this._normalizeNavigationSamples(samples);
         const lastSample = normalizedSamples[normalizedSamples.length - 1];
@@ -124,6 +153,8 @@ class Recorder extends XOpatModuleSingleton implements RecorderModule {
             navigation: { samples: normalizedSamples },
             visualization: this._getVisualizationSnapshot(viewer, state.captureVisualization),
             annotationFilters: this._getAnnotationFiltersSnapshot(),
+            viewerContextKey: viewerContext.key,
+            viewerTitle: viewerContext.title,
         };
 
         this._add(step, atIndex);
@@ -144,7 +175,7 @@ class Recorder extends XOpatModuleSingleton implements RecorderModule {
     }
 
     getSteps(): RecorderSnapshotStep[] {
-        return this._snapshotsState.steps.filter((step) => this._isValidStep(step));
+        return [...this._snapshotsState.steps];
     }
 
     getStep(index: number): RecorderSnapshotStep | undefined {
@@ -175,6 +206,7 @@ class Recorder extends XOpatModuleSingleton implements RecorderModule {
         }
 
         state.playbackAnnotationFilters = this._getAnnotationFiltersSnapshot();
+        state.playbackVisualizationSnapshots = {};
         state.playing = true;
         this.raiseEvent("play", {});
         this.playStep(state.idx);
@@ -222,6 +254,8 @@ class Recorder extends XOpatModuleSingleton implements RecorderModule {
             this._clearAnnotationFilters();
         }
         state.playbackAnnotationFilters = null;
+        this._restorePlaybackVisualizations();
+        state.playbackVisualizationSnapshots = {};
         this.raiseEvent("stop", {});
     }
 
@@ -280,7 +314,7 @@ class Recorder extends XOpatModuleSingleton implements RecorderModule {
     }
 
     stepCapturesVisualization(step: RecorderSnapshotStep): boolean {
-        return !!step.visualization?.cache;
+        return !!step.visualization?.visualizations?.length || !!step.visualization?.renderer?.shaders;
     }
 
     stepCapturesViewport(step: RecorderSnapshotStep): boolean {
@@ -315,6 +349,7 @@ class Recorder extends XOpatModuleSingleton implements RecorderModule {
         state.currentStep = null;
         state.currentPlayback = null;
         state.playbackAnnotationFilters = null;
+        state.playbackVisualizationSnapshots = {};
 
         if (Array.isArray(parsed)) {
             for (const item of parsed) {
@@ -323,6 +358,8 @@ class Recorder extends XOpatModuleSingleton implements RecorderModule {
                 const step: RecorderSnapshotStep = {
                     ...item,
                     kind: item.kind || (item.navigation?.samples?.length ? "navigation" : "keyframe"),
+                    viewerContextKey: typeof item.viewerContextKey === "string" ? item.viewerContextKey : undefined,
+                    viewerTitle: typeof item.viewerTitle === "string" ? item.viewerTitle : undefined,
                     rotation: typeof item.rotation === "number" ? item.rotation : undefined,
                     point: item.point ? new OpenSeadragon.Point(item.point.x, item.point.y) : undefined,
                     bounds: item.bounds
@@ -338,6 +375,9 @@ class Recorder extends XOpatModuleSingleton implements RecorderModule {
                                 : undefined,
                         })),
                     } : undefined,
+                    visualization: item.visualization
+                        ? this._cloneVisualizationStateSnapshot(item.visualization)
+                        : undefined,
                     annotationFilters: Array.isArray(item.annotationFilters)
                         ? item.annotationFilters.map((filter) => this._cloneAnnotationFilter(filter))
                         : undefined,
@@ -357,11 +397,28 @@ class Recorder extends XOpatModuleSingleton implements RecorderModule {
         ) as RecorderManagedViewer | undefined;
     }
 
+    private _resolveStepViewer(step: RecorderSnapshotStep | undefined): RecorderManagedViewer | undefined {
+        if (!step) return undefined;
+        const direct = VIEWER_MANAGER.getViewer(step.viewerId, false) as RecorderManagedViewer | undefined;
+        if (direct) return direct;
+        if (!step.viewerContextKey) return undefined;
+
+        for (const viewer of (VIEWER_MANAGER.viewers || []) as RecorderManagedViewer[]) {
+            const context = getViewerContextMeta(viewer);
+            if (context.key === step.viewerContextKey) {
+                step.viewerId = viewer.uniqueId;
+                if (!step.viewerTitle && context.title) step.viewerTitle = context.title;
+                return viewer;
+            }
+        }
+        return undefined;
+    }
+
     private _isValidStep(indexOrStep: number | RecorderSnapshotStep | undefined): boolean {
         const step = typeof indexOrStep === "number"
             ? this._snapshotsState.steps[indexOrStep]
             : indexOrStep;
-        return !!step?.viewerId && !!VIEWER_MANAGER.getViewer(step.viewerId);
+        return !!this._resolveStepViewer(step);
     }
 
     private playStep(index: number, jumps = false, fromIndex?: number): void {
@@ -419,25 +476,50 @@ class Recorder extends XOpatModuleSingleton implements RecorderModule {
     private _getVisualizationSnapshot(
         viewer: RecorderManagedViewer,
         captureVisualization: boolean,
-    ): RecorderVisualizationSnapshot | undefined {
-        const bridge = viewer.bridge;
-        if (!captureVisualization || !bridge) return undefined;
+    ): RecorderVisualizationStateSnapshot | undefined {
+        if (!captureVisualization) return undefined;
 
-        const visualization = bridge.visualization();
-        const shadersCache: Record<string, Record<string, unknown>> = {};
-
-        for (const key of visualization.order) {
-            const shader = visualization.shaders[key];
-            if (shader?.rendering) {
-                shadersCache[key] = cloneRecord(shader.cache);
-            }
-        }
-
+        const renderer = (viewer as RecorderManagedViewer & {
+            drawer?: {
+                renderer?: {
+                    exportVisualization?: () => RecorderVisualizationSnapshot;
+                    getVisualizationSnapshot?: () => RecorderVisualizationSnapshot;
+                };
+            };
+        }).drawer?.renderer;
+        const exported = renderer?.exportVisualization?.() || renderer?.getVisualizationSnapshot?.();
+        const visualizations = cloneValue(Array.isArray(APPLICATION_CONTEXT.config.visualizations)
+            ? APPLICATION_CONTEXT.config.visualizations
+            : []);
+        const activeVisualizationIndex = cloneValue(
+            APPLICATION_CONTEXT.getOption("activeVisualizationIndex", undefined, true, true)
+        );
         return {
-            index: bridge.currentVisualizationIndex(),
-            cache: shadersCache,
-            order: [...visualization.order],
+            visualizations,
+            activeVisualizationIndex,
+            renderer: exported ? cloneRecord(exported) : undefined,
         };
+    }
+
+    private _rememberPlaybackVisualization(viewer: RecorderManagedViewer, step: RecorderSnapshotStep): void {
+        const state = this._snapshotsState;
+        const key = step.viewerContextKey || step.viewerId;
+        if (!key || state.playbackVisualizationSnapshots[key]) return;
+        const snapshot = this._getVisualizationSnapshot(viewer, true);
+        if (!snapshot) return;
+        state.playbackVisualizationSnapshots[key] = snapshot;
+    }
+
+    private _restorePlaybackVisualizations(): void {
+        const snapshots = this._snapshotsState.playbackVisualizationSnapshots;
+        for (const step of this._snapshotsState.steps) {
+            const key = step.viewerContextKey || step.viewerId;
+            if (!key || !snapshots[key]) continue;
+            const viewer = this._resolveStepViewer(step);
+            if (!viewer) continue;
+            this._applyVisualizationSnapshot(viewer, snapshots[key], 0);
+            delete snapshots[key];
+        }
     }
 
     private _getAnnotationsModule(): {
@@ -519,7 +601,7 @@ class Recorder extends XOpatModuleSingleton implements RecorderModule {
     }
 
     private _add(step: RecorderSnapshotStep, index?: number): void {
-        if (!this._isValidStep(step)) return;
+        if (!step?.viewerId && !step?.viewerContextKey) return;
 
         const state = this._snapshotsState;
         let resolvedIndex = typeof index === "number" ? index : state.steps.length;
@@ -539,12 +621,13 @@ class Recorder extends XOpatModuleSingleton implements RecorderModule {
         const step = state.steps[index];
         if (!step || state.steps.length <= index) return undefined;
 
-        const viewer = VIEWER_MANAGER.getViewer(step.viewerId) as RecorderManagedViewer | undefined;
+        const viewer = this._resolveStepViewer(step);
         if (!viewer) return undefined;
 
         const capturesNavigation = this.stepCapturesNavigation(step);
         const capturesViewport = this.stepCapturesViewport(step);
         if (step.visualization) {
+            if (state.playing) this._rememberPlaybackVisualization(viewer, step);
             this._setVisualization(viewer, step, capturesViewport || capturesNavigation ? step.duration : 0);
         }
 
@@ -557,7 +640,7 @@ class Recorder extends XOpatModuleSingleton implements RecorderModule {
             }
             viewer.tools?.focus(step);
         } else {
-            viewer.bridge?.redraw();
+            viewer.forceRedraw?.();
         }
 
         if (state.playing) {
@@ -574,44 +657,56 @@ class Recorder extends XOpatModuleSingleton implements RecorderModule {
     }
 
     private _setVisualization(viewer: RecorderManagedViewer, step: RecorderSnapshotStep, duration: number): void {
-        const bridge = viewer.bridge;
         const target = step.visualization;
-        if (!bridge || !target) return;
+        if (!target) return;
+        this._applyVisualizationSnapshot(viewer, target, duration);
+    }
 
-        const currentIndex = bridge.currentVisualizationIndex();
-        const currentVisualization = bridge.visualization(target.index);
-        let needsRefresh = !this._equalOrder(currentVisualization.order, target.order);
+    private _applyVisualizationSnapshot(
+        viewer: RecorderManagedViewer,
+        target: RecorderVisualizationStateSnapshot,
+        _duration: number,
+    ): void {
+        const visualizations = cloneRecord(target.visualizations || []);
+        const activeSelection = Array.isArray(target.activeVisualizationIndex)
+            ? [...target.activeVisualizationIndex]
+            : target.activeVisualizationIndex;
 
-        for (const [key, shaderSetup] of Object.entries(currentVisualization.shaders)) {
-            const willBeVisible = Object.prototype.hasOwnProperty.call(target.cache, key);
-            if (willBeVisible !== shaderSetup.visible) {
-                needsRefresh = true;
-            }
-
-            shaderSetup.visible = willBeVisible;
-            if (!shaderSetup.visible) continue;
-
-            const cachedState = target.cache[key];
-            if (!cachedState) continue;
-
-            if (!needsRefresh && !this._equalCache(shaderSetup.cache, cachedState)) {
-                needsRefresh = true;
-            }
-            if (needsRefresh) {
-                shaderSetup.cache = cloneRecord(cachedState);
+        if (target.renderer?.shaders) {
+            const activeIndex = Array.isArray(activeSelection) ? activeSelection[0] : activeSelection;
+            if (Number.isInteger(activeIndex) && visualizations[activeIndex as number]) {
+                const current = cloneRecord(visualizations[activeIndex as number]);
+                const orderedShaders: Record<string, Record<string, unknown>> = {};
+                for (const shaderId of target.renderer.order || Object.keys(target.renderer.shaders)) {
+                    const shader = target.renderer.shaders[shaderId];
+                    if (shader) orderedShaders[shaderId] = cloneRecord(shader);
+                }
+                for (const [shaderId, shader] of Object.entries(target.renderer.shaders)) {
+                    if (!orderedShaders[shaderId]) orderedShaders[shaderId] = cloneRecord(shader);
+                }
+                current.shaders = orderedShaders as unknown as VisualizationItem["shaders"];
+                visualizations[activeIndex as number] = current;
             }
         }
 
-        if (currentIndex !== target.index) {
-            currentVisualization.order = [...target.order];
-            bridge.switchVisualization(target.index);
-            return;
-        }
+        void APPLICATION_CONTEXT.updateVisualization(visualizations, [], activeSelection as number | number[] | undefined)
+            .then(() => viewer.forceRedraw?.())
+            .catch(() => undefined);
+    }
 
-        if (needsRefresh) {
-            bridge.webGLEngine?.rebuildVisualization(target.order);
-            bridge.redraw(duration * 900);
-        }
+    private _cloneVisualizationStateSnapshot(snapshot: RecorderVisualizationStateSnapshot): RecorderVisualizationStateSnapshot {
+        return {
+            visualizations: cloneValue(snapshot.visualizations || []),
+            activeVisualizationIndex: Array.isArray(snapshot.activeVisualizationIndex)
+                ? [...snapshot.activeVisualizationIndex]
+                : snapshot.activeVisualizationIndex,
+            renderer: snapshot.renderer
+                ? {
+                    order: [...(snapshot.renderer.order || [])],
+                    shaders: snapshot.renderer.shaders ? cloneValue(snapshot.renderer.shaders) : undefined,
+                }
+                : undefined,
+        };
     }
 
     private _normalizeNavigationSamples(samples: RecorderNavigationSample[]): RecorderNavigationSample[] {
@@ -760,44 +855,6 @@ class Recorder extends XOpatModuleSingleton implements RecorderModule {
         );
     }
 
-    private _equalCache(a: Record<string, unknown> | undefined, b: Record<string, unknown> | undefined): boolean {
-        if ((!a || !b) && a !== b) return false;
-        if (!a || !b) return false;
-
-        const leftKeys = Object.keys(a);
-        const rightKeys = Object.keys(b);
-        if (leftKeys.length !== rightKeys.length) return false;
-
-        for (const key of leftKeys) {
-            const leftValue = a[key];
-            const rightValue = b[key];
-
-            if (
-                leftValue &&
-                rightValue &&
-                typeof leftValue === "object" &&
-                typeof rightValue === "object" &&
-                !Array.isArray(leftValue) &&
-                !Array.isArray(rightValue)
-            ) {
-                if (!this._equalCache(leftValue as Record<string, unknown>, rightValue as Record<string, unknown>)) {
-                    return false;
-                }
-                continue;
-            }
-
-            if (leftValue !== rightValue) {
-                return false;
-            }
-        }
-
-        return true;
-    }
-
-    private _equalOrder(left: string[] | undefined, right: string[] | undefined): boolean {
-        if (!left || !right || left.length !== right.length) return false;
-        return left.every((value, index) => value === right[index]);
-    }
 }
 
 window.OpenSeadragon.Recorder = Recorder as typeof OpenSeadragon.Recorder;

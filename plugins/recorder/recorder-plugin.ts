@@ -7,7 +7,8 @@ type AnnObj={presenterSids?:string[];visible?:boolean;dirty?:boolean;canvas?:Ann
 type AnnCanvas={forEachObject(cb:(o:AnnObj)=>void):void;renderAll():void};
 type AnnWrap={canvas?:AnnCanvas;loadObjects(input:{objects:Record<string,unknown>[]}):Promise<void>};
 type AnnModule={forceExportsProp?:string;fabric?:AnnWrap|{canvas?:AnnCanvas};wrapper?:AnnWrap;canvas?:AnnCanvas;fabricCanvas?:AnnCanvas;initPostIO?():Promise<unknown>;getFabric?(viewer:OpenSeadragon.Viewer):AnnWrap|undefined;trimExportJSON?(data:Record<string,unknown>[],key?:string):unknown;addFabricHandler(event:string,handler:(e:any)=>void):void;enableAnnotations(v:boolean):void};
-type Viewer=OpenSeadragon.Viewer&{uniqueId:UniqueViewerId;bridge?:RecorderViewerBridge;tools?:RecorderViewerTools};
+type Viewer=OpenSeadragon.Viewer&{uniqueId:UniqueViewerId;tools?:RecorderViewerTools};
+type ViewerContextMeta={viewer?:Viewer;index:number;uniqueId?:string;title?:string;label?:string;fileName?:string};
 type StepNode=(HTMLCanvasElement|HTMLSpanElement)&{dataset:DOMStringMap};
 type NavSession={viewer:Viewer;viewerId:UniqueViewerId;startedAt:number;samples:RecorderNavigationSample[];sampleHandler:()=>void;rafPending:boolean;lastSignature:string|null};
 const DELAY_PX_PER_SECOND=2;
@@ -18,6 +19,7 @@ class RecorderPlugin extends XOpatPlugin{
     private readonly _toolsMenuId="presenter-tools-menu";
     private readonly _capture:Params={delay:2,duration:1.4,transition:6.5};
     private readonly playOnEnter:number;
+    private captureAnnotations=true;
     private annotations:AnnModule|null=null;
     private navSession:NavSession|null=null;
     private annotationRefs:Record<string,AnnObj[]>={};
@@ -37,8 +39,9 @@ class RecorderPlugin extends XOpatPlugin{
 
     pluginReady():void{
         this.recorder=OpenSeadragon.Recorder.instance();
+        this.recorder.setCapturesVisualization(true);
         USER_INTERFACE.Tools.setMenu(this.id,this._toolsMenuId,"Timeline",this._timelineComponent(),"play_circle",true);
-        this.track.style.height=`${48*Math.max(1,VIEWER_MANAGER.viewers?.length||1)}px`;
+        this._renderSlideRows();
         this._syncPlayButton();
         this._syncInputs();
         this._initSortableTimeline(); this._handleInitAnnotationsModule(); this._initEvents();
@@ -58,11 +61,11 @@ class RecorderPlugin extends XOpatPlugin{
                 self.playButton=btn("presenter-play-icon","Play","play",()=>self.togglePlayback(),"text-success"),
                 btn("presenter-next-icon","Next","next",()=>self.recorder.next()),
                 btn("presenter-delete-icon","Delete","trash",()=>self.removeHighlightedRecord(),"text-warning"),
-                self.defaultsButton=btn("recorder-edit-defaults","Edit defaults for new captures","defaults",()=>self.clearSelection(),"text-base-content/70"),
+                self.defaultsButton=btn("recorder-edit-defaults","Edit defaults for new captures","defaults",()=>self.openDefaultsModal(),"text-base-content/70"),
                 new UI.Input({legend:"Delay",suffix:"s",id:"point-delay",size:UI.Input.SIZE.SMALL,onChange:(e:Event)=>self.setValue("delay",parseFloat((e.target as HTMLInputElement).value)),extraProperties:{type:"number",min:"0",step:"0.1",value:self._capture.delay.toString(),style:"width:3.5rem;"}}).create(),
                 new UI.Input({legend:"Duration",suffix:"s",id:"point-duration",size:UI.Input.SIZE.SMALL,onChange:(e:Event)=>self.setValue("duration",parseFloat((e.target as HTMLInputElement).value)),extraProperties:{type:"number",min:"0.1",step:"0.1",value:self._capture.duration.toString(),style:"width:3.5rem;"}}).create(),
             );
-            self.track=div({id:"presenter-timeline-track",class:"inline-block align-top relative flex-1 px-3 bg-base-200 rounded-sm w-full overflow-x-auto overflow-y-hidden",style:"white-space:nowrap;height:48px;min-width:100px;"}) as HTMLDivElement;
+            self.track=div({id:"presenter-timeline-track",class:"inline-block align-top relative flex-1 px-3 bg-base-200 rounded-sm w-full overflow-x-auto overflow-y-auto",style:"white-space:nowrap;height:48px;min-width:100px;"}) as HTMLDivElement;
             return div({class:"flex flex-col gap-2"},self.track,controls);
         }} return new Panel();
     }
@@ -82,11 +85,28 @@ class RecorderPlugin extends XOpatPlugin{
 
     private _getActiveViewer():Viewer|null{return (VIEWER_MANAGER.get?.()||VIEWER_MANAGER.viewers?.[0]||window.VIEWER||null) as Viewer|null;}
     private _resolveActiveViewerId():UniqueViewerId|null{return VIEWER_MANAGER.getActiveUniqueId?.()||this._getActiveViewer()?.uniqueId||null;}
+    private _viewerRowHeight():number{return 48;}
+    private _insertionIndex():number{return this.selectedIndex===null?this.recorder.snapshotCount():this.selectedIndex+1;}
+    private _getViewerContext(viewerOrId:Viewer|UniqueViewerId):ViewerContextMeta|undefined{
+        return (UTILITIES as typeof UTILITIES&{getViewerIOContext?:(viewerOrUniqueId:Viewer|UniqueViewerId,stripSuffix?:boolean)=>ViewerContextMeta|undefined}).getViewerIOContext?.(viewerOrId,true);
+    }
+    private _resolveViewerForStep(step:RecorderSnapshotStep):Viewer|undefined{
+        const direct=VIEWER_MANAGER.getViewer(step.viewerId,false) as Viewer|undefined;
+        if(direct) return direct;
+        if(!step.viewerContextKey) return undefined;
+        const matched=((VIEWER_MANAGER.viewers||[]) as Viewer[]).filter(Boolean).find(viewer=>{
+            const context=this._getViewerContext(viewer);
+            return context?.title===step.viewerContextKey||context?.fileName===step.viewerContextKey||context?.uniqueId===step.viewerContextKey;
+        });
+        if(matched) step.viewerId=matched.uniqueId;
+        return matched;
+    }
+    private _shortLabel(value:string,max=18):string{return value.length<=max?value:`${value.slice(0,Math.max(0,max-1)).trimEnd()}…`;}
 
     addFrame():void{
         if(this.isPlaying) return;
         const viewerId=this._resolveActiveViewerId(); if(!viewerId) return void Dialogs.show("No active viewer is available for recording.",2500,Dialogs.MSG_WARN);
-        this.recorder.create(viewerId,this._capture.delay,this._capture.duration,this._capture.transition,this.recorder.snapshotCount());
+        this.recorder.create(viewerId,this._capture.delay,this._capture.duration,this._capture.transition,this._insertionIndex());
     }
 
     togglePlayback():void{
@@ -115,7 +135,7 @@ class RecorderPlugin extends XOpatPlugin{
         this._captureNavigationSample(s); this.navSession=null; this._syncRecordPathButton();
         if(!save) return;
         if(s.samples.length<2) return void Dialogs.show("Recorded path is too short.",2000,Dialogs.MSG_WARN);
-        this.recorder.createNavigation(s.viewerId,s.samples,this._capture.delay,this._capture.duration,this._capture.transition,this.recorder.snapshotCount());
+        this.recorder.createNavigation(s.viewerId,s.samples,this._capture.delay,this._capture.duration,this._capture.transition,this._insertionIndex());
     }
 
     private _captureNavigationSample(s:NavSession):void{
@@ -146,10 +166,83 @@ class RecorderPlugin extends XOpatPlugin{
         $("#point-duration").val(duration);
         const delayInput=document.getElementById("point-delay") as HTMLInputElement|null;
         const durationInput=document.getElementById("point-duration") as HTMLInputElement|null;
+        if(delayInput) delayInput.value=String(delay);
+        if(durationInput) durationInput.value=String(duration);
         if(delayInput) delayInput.title=step?`Step delay. Default: ${this._capture.delay}s`:`Default delay for new captures`;
         if(durationInput) durationInput.title=step?`Step duration. Default: ${this._capture.duration}s`:`Default duration for new captures`;
-        this.defaultsButton?.classList.toggle("btn-primary",!step);
-        this.defaultsButton?.classList.toggle("btn-ghost",!!step);
+    }
+
+    openDefaultsModal():void{
+        const body=document.createElement("div");
+        body.className="flex flex-col gap-4";
+
+        const createNumberField=(label:string,value:number,min:string,step:string)=>{
+            const wrapper=document.createElement("label");
+            wrapper.className="form-control w-full";
+            const caption=document.createElement("span");
+            caption.className="label-text text-sm";
+            caption.textContent=label;
+            const field=document.createElement("input");
+            field.type="number";
+            field.min=min;
+            field.step=step;
+            field.value=String(value);
+            field.className="input input-bordered input-sm w-full";
+            wrapper.append(caption,field);
+            return {wrapper,field};
+        };
+        const createToggle=(label:string,checked:boolean)=>{
+            const wrapper=document.createElement("label");
+            wrapper.className="label cursor-pointer justify-start gap-3";
+            const field=document.createElement("input");
+            field.type="checkbox";
+            field.checked=checked;
+            field.className="toggle toggle-primary toggle-sm";
+            const caption=document.createElement("span");
+            caption.className="label-text";
+            caption.textContent=label;
+            wrapper.append(field,caption);
+            return {wrapper,field};
+        };
+
+        const delayField=createNumberField("Default delay",this._capture.delay,"0","0.1");
+        const durationField=createNumberField("Default duration",this._capture.duration,"0.1","0.1");
+        const visualizationToggle=createToggle("Capture visualization",!!this.recorder.capturesVisualization);
+        const annotationsToggle=createToggle("Capture annotations",this.captureAnnotations);
+        body.append(delayField.wrapper,durationField.wrapper,visualizationToggle.wrapper,annotationsToggle.wrapper);
+
+        let modal:InstanceType<typeof UI.Modal>;
+        modal=new UI.Modal({
+            id:`${this.id}-recorder-defaults-modal`,
+            header:"Recorder Defaults",
+            body,
+            footer:(()=>{
+                const footer=document.createElement("div");
+                footer.className="flex w-full justify-end gap-2";
+                const cancelBtn=document.createElement("button");
+                cancelBtn.type="button";
+                cancelBtn.className="btn btn-ghost";
+                cancelBtn.textContent="Cancel";
+                cancelBtn.onclick=()=>modal.close();
+                const saveBtn=document.createElement("button");
+                saveBtn.type="button";
+                saveBtn.className="btn btn-primary";
+                saveBtn.textContent="Apply";
+                saveBtn.onclick=()=>{
+                    const delay=Number(delayField.field.value);
+                    const duration=Number(durationField.field.value);
+                    if(Number.isFinite(delay)&&delay>=0) this._capture.delay=delay;
+                    if(Number.isFinite(duration)&&duration>0) this._capture.duration=duration;
+                    this.recorder.setCapturesVisualization(visualizationToggle.field.checked);
+                    this.captureAnnotations=annotationsToggle.field.checked;
+                    if(this.selectedIndex===null) this._syncInputs();
+                    modal.close();
+                };
+                footer.append(cancelBtn,saveBtn);
+                return footer;
+            })()
+        }).mount();
+        modal.open();
     }
 
     private _ensureMeasureNode():HTMLSpanElement{
@@ -193,11 +286,16 @@ class RecorderPlugin extends XOpatPlugin{
         },50);
     }
 
-    selectPoint(node:HTMLElement):void{const index=Array.from(this.track.querySelectorAll<HTMLElement>("[data-id]")).indexOf(node); if(index<0) return; this.recorder.goToIndex(index); this._highlight(this.recorder.currentStep(),index);}
+    selectPoint(node:HTMLElement):void{
+        const index=Array.from(this.track.querySelectorAll<HTMLElement>("[data-id]")).indexOf(node);
+        if(index<0) return;
+        this.recorder.goToIndex(index);
+        this._highlight(this.recorder.getStep(index),index);
+    }
 
     clearSelection():void{
         this.selectedIndex=null;
-        this.oldHighlight?.classList.remove("outline","outline-2","outline-error");
+        this.track.querySelectorAll<HTMLElement>("[data-id]").forEach(node=>node.classList.remove("outline","outline-2","outline-error"));
         this.oldHighlight=null;
         this._syncInputs();
     }
@@ -250,12 +348,18 @@ class RecorderPlugin extends XOpatPlugin{
         node.classList.add("outline","outline-2","outline-error"); this._syncInputs(step);
     }
 
-    private _resetAllUISteps():void{this.track.innerHTML=""; this.recorder.getSteps().forEach(step=>this._addUIStepFrom(step.viewerId,step,false));}
+    private _resetAllUISteps():void{
+        this.track.innerHTML="";
+        this._renderSlideRows();
+        this.recorder.getSteps().forEach(step=>this._addUIStepFrom(step.viewerId,step,false));
+    }
 
     private _addUIStepFrom(viewerId:UniqueViewerId,step:RecorderSnapshotStep,withNav=true,atIndex?:number):void{
-        const viewer=VIEWER_MANAGER.getViewer(viewerId) as Viewer|undefined; if(!viewer) return;
+        const viewer=this._resolveViewerForStep(step); if(!viewer) return;
         const node=(step.kind==="navigation"?document.createElement("canvas"):document.createElement("span")) as StepNode;
-        node.id=`step-timeline-${step.id}`; node.dataset.id=step.id; node.dataset.group=viewerId; node.draggable=true; node.className="inline-block rounded-sm cursor-pointer align-top";
+        node.id=`step-timeline-${step.id}`; node.dataset.id=step.id; node.dataset.group=viewer.uniqueId; node.draggable=true; node.className="inline-block rounded-sm cursor-pointer align-top";
+        node.style.position="relative";
+        node.style.zIndex="1";
         this._refreshStepNode(node,step,viewer);
         if(typeof atIndex==="number"){const children=Array.from(this.track.querySelectorAll<HTMLElement>("[data-id]")); const before=children[atIndex]; if(before) this.track.insertBefore(node,before); else this.track.appendChild(node);} else this.track.appendChild(node);
         if(withNav&&typeof atIndex==="number"){this.recorder.goToIndex(atIndex); this._highlight(step,atIndex);}
@@ -276,10 +380,10 @@ class RecorderPlugin extends XOpatPlugin{
     }
 
     private _getStepSize(step:RecorderSnapshotStep,viewer:Viewer){
-        const idx=Math.max(0,VIEWER_MANAGER.getViewerIndex(step.viewerId,false)), zoom=this._representativeZoom(step)??1;
+        const idx=Math.max(0,VIEWER_MANAGER.getViewerIndex(viewer.uniqueId,false)), zoom=this._representativeZoom(step)??1;
         const maxHeight=Math.max(7,Math.log(viewer.viewport.getMaxZoom())/Math.log(viewer.viewport.getMaxZoom()+1)*18+14);
         const normalHeight=Math.max(7,Math.log(zoom)/Math.log(viewer.viewport.getMaxZoom()+1)*18+14);
-        return {width:this._durationWidth(step.duration),height:step.kind==="navigation"?maxHeight:normalHeight,marginLeft:this._delayWidth(step.delay),marginTop:48*idx,radius:this._metric("transition",step.transition)};
+        return {width:this._durationWidth(step.duration),height:step.kind==="navigation"?maxHeight:normalHeight,marginLeft:this._delayWidth(step.delay),marginTop:this._viewerRowHeight()*idx,radius:this._metric("transition",step.transition)};
     }
 
     private _drawStepCanvas(node:HTMLCanvasElement,step:RecorderSnapshotStep,size:{width:number;height:number;radius:number},ratio:number,viewer:Viewer):void{
@@ -326,6 +430,51 @@ class RecorderPlugin extends XOpatPlugin{
     }
     private _metric(key:keyof Params,value:number):number{return key==="delay"?this._delayWidth(value):key==="duration"?this._durationWidth(value):value;}
 
+    private _viewerLabel(viewer:Viewer,index:number):string{
+        const context=this._getViewerContext(viewer);
+        const raw=context?.title
+            || context?.fileName
+            || (viewer as Viewer&{name?:string;title?:string;label?:string;element?:HTMLElement}).name
+            || (viewer as Viewer&{name?:string;title?:string;label?:string;element?:HTMLElement}).title
+            || (viewer as Viewer&{name?:string;title?:string;label?:string;element?:HTMLElement}).label
+            || (viewer as Viewer&{element?:HTMLElement}).element?.getAttribute("data-title")
+            || (viewer as Viewer&{element?:HTMLElement}).element?.getAttribute("title")
+            || (viewer as Viewer&{element?:HTMLElement}).element?.id;
+        return raw&&raw.trim()?raw.trim():`Slide ${index+1}`;
+    }
+
+    private _renderSlideRows():void{
+        this.track.querySelectorAll<HTMLElement>("[data-slide-row='true']").forEach(node=>node.remove());
+        const viewers=((VIEWER_MANAGER.viewers||[]) as Viewer[]).filter(Boolean);
+        const rowHeight=this._viewerRowHeight();
+        this.track.style.height=`${rowHeight*Math.max(1,viewers.length)}px`;
+        viewers.forEach((viewer,index)=>{
+            const row=document.createElement("div");
+            row.dataset.slideRow="true";
+            row.className="absolute left-0 right-0 rounded-sm border border-base-300 pointer-events-none";
+            row.style.top=`${index*rowHeight}px`;
+            row.style.height=`${rowHeight}px`;
+            row.style.zIndex="0";
+            row.style.backgroundColor="rgba(255,255,255,0.03)";
+
+            const label=document.createElement("span");
+            label.className="absolute right-2 bottom-1 text-xs uppercase opacity-60 bg-base-100 px-1 rounded";
+            const fullLabel=this._viewerLabel(viewer,index);
+            label.textContent=this._shortLabel(fullLabel);
+            label.title=fullLabel;
+            label.style.pointerEvents="auto";
+            label.style.cursor="pointer";
+            label.onclick=(event)=>{
+                event.stopPropagation();
+                const expanded=label.dataset.expanded==="true";
+                label.dataset.expanded=expanded?"false":"true";
+                label.textContent=expanded?this._shortLabel(fullLabel):fullLabel;
+            };
+            row.appendChild(label);
+            this.track.appendChild(row);
+        });
+    }
+
     private _getAnnotationsWrapper(viewerLike?:OpenSeadragon.Viewer):AnnWrap|null{
         const e=this.annotations; if(!e) return null; const viewer=viewerLike||this._getActiveViewer(); const c:Array<AnnWrap|undefined>=[];
         if(viewer&&typeof e.getFabric==="function"){try{c.push(e.getFabric(viewer));}catch(error){console.warn("Recorder: failed to resolve annotations wrapper for viewer.",error);}}
@@ -346,6 +495,20 @@ class RecorderPlugin extends XOpatPlugin{
     private _recordAnnotationRef(annotation:AnnObj,stepId:string):void{const refs=this.annotationRefs[stepId]||[]; if(!refs.includes(annotation)) refs.push(annotation); this.annotationRefs[stepId]=refs;}
     private _removeAnnotationRef(annotation:AnnObj,stepId?:string):boolean{if(!annotation.presenterSids) return false; for(const id of (stepId?[stepId]:annotation.presenterSids)) this._arrRemove(this.annotationRefs[id],annotation); return true;}
     private _arrRemove<T>(array:T[]|undefined,item:T):void{if(!array) return; const i=array.indexOf(item); if(i>-1) array.splice(i,1);}
+
+    private _captureAnnotationsForStep(viewerId:UniqueViewerId,stepId:string):void{
+        if(!this.captureAnnotations) return;
+        const viewer=VIEWER_MANAGER.getViewer(viewerId) as OpenSeadragon.Viewer|undefined;
+        const canvas=this._getAnnotationsCanvas(viewer);
+        if(!canvas) return;
+        canvas.forEachObject(annotation=>{
+            if(annotation.visible===false) return;
+            const sids=annotation.presenterSids||[];
+            if(!sids.includes(stepId)) sids.push(stepId);
+            annotation.presenterSids=sids;
+            this._recordAnnotationRef(annotation,stepId);
+        });
+    }
 
     private _bindAnnotations():boolean{
         const viewers=((VIEWER_MANAGER.viewers||[]) as OpenSeadragon.Viewer[]).filter(Boolean); if(viewers.length<1) return false;
@@ -392,6 +555,7 @@ class RecorderPlugin extends XOpatPlugin{
             this._syncPlayButton();
             this._clearMeasureLoop();
         });
+
         this.recorder.addHandler("enter",(e:{step:RecorderSnapshotStep;index:number;prevStep?:RecorderSnapshotStep})=>{
             this._highlight(e.step,e.index);
             const currentNode=this._findUIStep(e.index);
@@ -409,10 +573,15 @@ class RecorderPlugin extends XOpatPlugin{
             const cur=this.annotationRefs[e.step.id]; if(cur){cur.forEach(a=>{a.visible=true; a.dirty=true; changed.push(a);}); updates=true;}
             if(updates) this._renderAnnotations(changed);
         });
-        this.recorder.addHandler("create",(e:{viewerId:UniqueViewerId;step:RecorderSnapshotStep;index:number})=>{USER_INTERFACE.Tools.notify(this._toolsMenuId); this._addUIStepFrom(e.viewerId,e.step,false,e.index); this._highlight(e.step,e.index);});
+        this.recorder.addHandler("create",(e:{viewerId:UniqueViewerId;step:RecorderSnapshotStep;index:number})=>{
+            this._captureAnnotationsForStep(e.viewerId,e.step.id);
+            USER_INTERFACE.Tools.notify(this._toolsMenuId);
+            this._addUIStepFrom(e.viewerId,e.step,false,e.index);
+            this._highlight(e.step,e.index);
+        });
         this.recorder.addHandler("remove",(e:{step:RecorderSnapshotStep})=>{const refs=this.annotationRefs[e.step.id]; refs?.forEach(o=>{const i=o.presenterSids?.indexOf(e.step.id)??-1; if(i>=0) o.presenterSids!.splice(i,1);});});
-        VIEWER_MANAGER.addHandler("viewer-create",()=>{this.track.style.height=`${48*VIEWER_MANAGER.viewers.length}px`; this._resetAllUISteps();});
-        VIEWER_MANAGER.addHandler("viewer-destroy",()=>{this.track.style.height=`${48*VIEWER_MANAGER.viewers.length}px`; this._resetAllUISteps();});
+        VIEWER_MANAGER.addHandler("viewer-create",()=>{this._resetAllUISteps();});
+        VIEWER_MANAGER.addHandler("viewer-destroy",()=>{this._resetAllUISteps();});
         VIEWER_MANAGER.addHandler("viewer-reset",()=>this._resetAllUISteps());
         VIEWER_MANAGER.addHandler("module-loaded",(e:{id:string})=>{if(e.id==="annotations") this._handleInitAnnotationsModule();});
         VIEWER_MANAGER.addHandler("key-down",(e:KeyboardEvent&{focusCanvas?:boolean})=>{if(!e.focusCanvas) return; if(e.code==="KeyN") this.recorder.goToIndex(this.recorder.currentStepIndex()+1); else if(e.code==="KeyS") this.recorder.goToIndex(0);});

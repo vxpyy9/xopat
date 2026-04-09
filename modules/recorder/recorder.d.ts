@@ -34,36 +34,22 @@ declare global {
         screenshot(fullPage?: boolean, region?: Record<string, number>): unknown;
     }
 
-    interface RecorderVisualizationShaderState {
-        rendering?: boolean;
-        visible: boolean;
-        cache: Record<string, unknown>;
-    }
-
-    interface RecorderVisualizationState {
-        order: string[];
-        shaders: Record<string, RecorderVisualizationShaderState>;
-    }
-
-    interface RecorderViewerBridge {
-        visualization(index?: number): RecorderVisualizationState;
-        currentVisualizationIndex(): number;
-        switchVisualization(index: number): void;
-        redraw(duration?: number): void;
-        webGLEngine?: {
-            rebuildVisualization(order: string[]): void;
-        };
-    }
-
     interface RecorderVisualizationSnapshot {
-        index: number;
-        cache: Record<string, Record<string, unknown>>;
         order: string[];
+        shaders?: Record<string, Record<string, unknown>>;
+    }
+
+    interface RecorderVisualizationStateSnapshot {
+        visualizations: VisualizationItem[];
+        activeVisualizationIndex?: number | number[];
+        renderer?: RecorderVisualizationSnapshot;
     }
 
     interface RecorderSnapshotStep {
         id: string;
         viewerId: UniqueViewerId;
+        viewerContextKey?: string;
+        viewerTitle?: string;
         kind?: RecorderStepKind;
         delay: number;
         duration: number;
@@ -74,7 +60,7 @@ declare global {
         point?: OpenSeadragon.Point;
         bounds?: OpenSeadragon.Rect;
         navigation?: RecorderNavigationTrack;
-        visualization?: RecorderVisualizationSnapshot;
+        visualization?: RecorderVisualizationStateSnapshot;
         annotationFilters?: RecorderAnnotationFilter[];
         screenShot?: unknown;
     }
@@ -94,6 +80,7 @@ declare global {
         captureViewport: boolean;
         captureScreen: boolean;
         playbackAnnotationFilters: RecorderAnnotationFilter[] | null;
+        playbackVisualizationSnapshots: Record<string, RecorderVisualizationStateSnapshot>;
     }
 
     interface RecorderModule extends IXOpatModuleSingleton {
@@ -143,7 +130,6 @@ declare global {
     namespace OpenSeadragon {
         interface Viewer {
             tools?: RecorderViewerTools;
-            bridge?: RecorderViewerBridge;
         }
 
         const Recorder: {
