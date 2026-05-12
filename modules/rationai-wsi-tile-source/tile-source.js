@@ -11,17 +11,6 @@ OpenSeadragon.RationaiStandaloneV3TileSource = class extends OpenSeadragon.TileS
     constructor(options) {
         super(options);
 
-        this._httpClient = options._httpClient
-            || OpenSeadragon.RationaiStandaloneV3TileSource._globalHttpClient
-            || null;
-
-        // Rebase absolute tilesUrl through proxy when httpClient is configured.
-        // Applies to the URL-based (non empaia-standalone) init path where configure()
-        // already received the absolute tilesUrl from supports().
-        if (this._httpClient && this.tilesUrl) {
-            this.tilesUrl = this._rebaseUrl(this.tilesUrl);
-        }
-
         if (!this.__configuredDownload) {
             this._setDownloadHandler(options.multifetch);
         }
@@ -39,20 +28,8 @@ OpenSeadragon.RationaiStandaloneV3TileSource = class extends OpenSeadragon.TileS
         this._dataFormat = "rasterBlob";
     }
 
-    // Rebase an absolute URL to go through the configured proxy.
-    _rebaseUrl(absoluteUrl) {
-        if (!this._httpClient) return absoluteUrl;
-        try {
-            const { pathname, search } = new URL(absoluteUrl);
-            return this._httpClient.baseURL + pathname + (search || "");
-        } catch {
-            return absoluteUrl;
-        }
-    }
-
-    // Returns headers needed for proxy requests (CSRF token read dynamically).
-    _proxyHeaders() {
-        if (!this._httpClient?.usingProxy) return {};
+    // Returns CSRF header if token is available (used when routing through xOpat proxy).
+    _csrfHeaders() {
         return window?.XOPAT_CSRF_TOKEN ? { "X-XOPAT-CSRF": window.XOPAT_CSRF_TOKEN } : {};
     }
 
@@ -172,8 +149,6 @@ OpenSeadragon.RationaiStandaloneV3TileSource = class extends OpenSeadragon.TileS
         const secret = user.getSecret();
         const headers = secret ? {"Authorization": user.getSecret()} : {};
 
-        const httpClient = OpenSeadragon.RationaiStandaloneV3TileSource._globalHttpClient;
-
         if (!Array.isArray(data)) {
             if (!data) {
                 this.metadata = {error: "Invalid data: no data available for given url " + url}
@@ -198,7 +173,6 @@ OpenSeadragon.RationaiStandaloneV3TileSource = class extends OpenSeadragon.TileS
                 innerFormat: data.format,
                 ajaxHeaders: headers,
                 multifetch: false,
-                _httpClient: httpClient || undefined,
                 // values returned here get attached to 'this', we return this.metadata in getMetadata()
                 metadata: {
                     // empaia stores pixel size in nanometers, we need microns
@@ -270,7 +244,6 @@ OpenSeadragon.RationaiStandaloneV3TileSource = class extends OpenSeadragon.TileS
             tilesUrl: data[0].tilesUrl,
             ajaxHeaders: headers,
             multifetch: true,
-            _httpClient: httpClient || undefined,
             data: represent,
             dataSet: data,
             metadata: {
@@ -297,21 +270,7 @@ OpenSeadragon.RationaiStandaloneV3TileSource = class extends OpenSeadragon.TileS
     }
 
     getImageInfo(url) {
-        if (!this._handlesOwnImageLoadLogics) {
-            // URL-based init path: translate absolute URL through proxy when configured.
-            if (this._httpClient) {
-                try {
-                    const { pathname, search } = new URL(url);
-                    url = this._httpClient.baseURL + pathname + (search || "");
-                } catch {}
-                // Inject current CSRF token so OSD's internal ajax picks it up.
-                this.ajaxHeaders = this.ajaxHeaders || {};
-                const csrf = window?.XOPAT_CSRF_TOKEN;
-                if (csrf) this.ajaxHeaders["X-XOPAT-CSRF"] = csrf;
-                this.ajaxWithCredentials = true;
-            }
-            return super.getImageInfo(url);
-        }
+        if (!this._handlesOwnImageLoadLogics) return super.getImageInfo(url);
 
         let match = url.match(/^(\/?[^\/].*\/v3\/files)\/info/i);
         if (match) {
@@ -327,30 +286,23 @@ OpenSeadragon.RationaiStandaloneV3TileSource = class extends OpenSeadragon.TileS
     }
 
     _getInfo(url, tilesUrl) {
-        const load = this._httpClient
-            ? (() => {
-                const { pathname, search } = new URL(url);
-                return this._httpClient.request(pathname + (search || ""), { expect: "json" });
-            })()
-            : fetch(url, {
-                headers: this.ajaxHeaders || {}
-            }).then(async res => {
-                const text = await res.text();
-                let json;
-                try { json = JSON.parse(text) } catch (e) {}
-                if (res.status !== 200 || !json) {
-                    throw new HTTPError("Empaia standalone failed to fetch image info!", json || text, res.error);
-                }
-                return json;
-            });
-
-        load.then(imageInfo => {
+        fetch(url, {
+            headers: { ...this.ajaxHeaders, ...this._csrfHeaders() },
+            credentials: "same-origin",
+        }).then(async res => {
+            const text = await res.text();
+            let json;
+            try { json = JSON.parse(text) } catch (e) {}
+            if (res.status !== 200 || !json) {
+                throw new HTTPError("Empaia standalone failed to fetch image info!", json || text, res.error);
+            }
+            return json;
+        }).then(imageInfo => {
             const data = this.configure(imageInfo, url, null);
             // necessary TileSource props that wont get set manually
             data.dimensions  = new OpenSeadragon.Point( data.width, data.height );
             data.aspectRatio = data.width / data.height;
-            // Rebase tilesUrl through proxy if httpClient is configured.
-            data.tilesUrl = this._rebaseUrl(tilesUrl);
+            data.tilesUrl = tilesUrl;
             data.ready = true;
             OpenSeadragon.extend(this, data);
             this.raiseEvent('ready', {tileSource: this});
@@ -399,10 +351,9 @@ OpenSeadragon.RationaiStandaloneV3TileSource = class extends OpenSeadragon.TileS
     async getThumbnail({ targetWidth = 512 } = {}) {
         // todo multifetch - how to handle multiple thumbnails?
         targetWidth = Math.min(targetWidth, 500); //default max value
-        const url = `${this.tilesUrl}/thumbnail/max_size/${targetWidth}/${targetWidth}?slide_id=${this.fileId}${this._qArgs}`;
-        return fetch(url, {
-            headers: this._proxyHeaders(),
-            ...(this._httpClient?.usingProxy ? { credentials: "same-origin" } : {}),
+        return fetch(`${this.tilesUrl}/thumbnail/max_size/${targetWidth}/${targetWidth}?slide_id=${this.fileId}${this._qArgs}`, {
+            headers: this._csrfHeaders(),
+            credentials: "same-origin",
         }).then(async res => res.blob());
     }
 
@@ -412,8 +363,8 @@ OpenSeadragon.RationaiStandaloneV3TileSource = class extends OpenSeadragon.TileS
     async downloadICCProfile() {
         const url = `${this.tilesUrl}/icc_profile?slide_id=${this.fileId}`;
         return fetch(url, {
-            headers: this._proxyHeaders(),
-            ...(this._httpClient?.usingProxy ? { credentials: "same-origin" } : {}),
+            headers: this._csrfHeaders(),
+            credentials: "same-origin",
         }).then(async res => res.arrayBuffer());
     }
 
@@ -446,11 +397,9 @@ OpenSeadragon.RationaiStandaloneV3TileSource = class extends OpenSeadragon.TileS
 
                 var dataStore = context.userData;
                 if (this.ajaxHeaders["Authorization"]) context.ajaxHeaders["Authorization"] = this.ajaxHeaders["Authorization"];
-                if (this._httpClient?.usingProxy) {
-                    const csrf = window?.XOPAT_CSRF_TOKEN;
-                    if (csrf) context.ajaxHeaders["X-XOPAT-CSRF"] = csrf;
-                    context.ajaxWithCredentials = true;
-                }
+                const csrf = window?.XOPAT_CSRF_TOKEN;
+                if (csrf) context.ajaxHeaders["X-XOPAT-CSRF"] = csrf;
+                context.ajaxWithCredentials = true;
                 const _this = this;
 
                 dataStore.request = OpenSeadragon.makeAjaxRequest({
@@ -536,7 +485,7 @@ OpenSeadragon.RationaiStandaloneV3TileSource = class extends OpenSeadragon.TileS
             mode: 'cors',
             cache: 'no-cache',
             credentials: 'same-origin',
-            headers: imageJob.ajaxHeaders || {},
+            headers: { ...imageJob.ajaxHeaders, ...this._csrfHeaders() },
             body: null
         }).then(res => res.blob()).then(data => {
             imageJob.finish(data, null, this._dataFormat);
@@ -553,13 +502,6 @@ OpenSeadragon.RationaiStandaloneV3TileSource = class extends OpenSeadragon.TileS
         let controller = new AbortController();
         let signal = controller.signal;
         init = Object.assign({signal}, init);
-        if (this._httpClient?.usingProxy) {
-            init.credentials = "same-origin";
-            const csrf = window?.XOPAT_CSRF_TOKEN;
-            if (csrf) {
-                init.headers = Object.assign({}, init.headers, { "X-XOPAT-CSRF": csrf });
-            }
-        }
         let promise = fetch(input, init);
         promise.controller = controller;
         return promise;
@@ -570,22 +512,3 @@ OpenSeadragon.RationaiStandaloneV3TileSource = class extends OpenSeadragon.TileS
         return `${x}_${y}/${level}/${this.fileId}`;
     }
 };
-
-// Initialize global HttpClient from module config if proxy is configured.
-// Reads APPLICATION_CONTEXT.config.modules["rationai-wsi-tile-source"].httpClient
-try {
-    const modCfg = APPLICATION_CONTEXT?.config?.modules?.["rationai-wsi-tile-source"] || {};
-    const hcCfg = modCfg.httpClient;
-    if (hcCfg?.proxy) {
-        OpenSeadragon.RationaiStandaloneV3TileSource._globalHttpClient = new HttpClient({
-            proxy: hcCfg.proxy,
-            ...(hcCfg.timeoutMs != null && { timeoutMs: hcCfg.timeoutMs }),
-            ...(hcCfg.maxRetries != null && { maxRetries: hcCfg.maxRetries }),
-        });
-    } else {
-        OpenSeadragon.RationaiStandaloneV3TileSource._globalHttpClient = null;
-    }
-} catch (e) {
-    console.warn("[RationAI WSI] Could not initialize HttpClient from module config:", e);
-    OpenSeadragon.RationaiStandaloneV3TileSource._globalHttpClient = null;
-}
