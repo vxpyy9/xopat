@@ -253,7 +253,8 @@ async function responseProxy(req, res, requestUrl) {
     const targetPath = '/' + parts.slice(2).join('/') + (requestUrl.search || '');
 
     // 3. Match against the "secure.proxies" definition
-    const serverConf = core.CORE.server || core.CORE.serverStatus || {};
+    // Proxy config lives in env.json under "server.secure.proxies" (top-level, not inside "core").
+    const serverConf = core.ENV?.server || core.CORE.server || {};
     const proxyConfig = serverConf.secure?.proxies?.[alias];
 
     if (!proxyConfig) {
